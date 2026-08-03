@@ -16,6 +16,23 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    const coregraphics = b.createModule(.{
+        .root_source_file = b.path("src/bindings/coregraphics.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    if (b.graph.environ_map.get("SDKROOT")) |sdk_root| {
+        coregraphics.addSystemFrameworkPath(.{
+            .cwd_relative = b.pathJoin(&.{
+                sdk_root,
+                "System/Library/Frameworks",
+            }),
+        });
+    }
+    coregraphics.linkFramework("CoreGraphics", .{});
+
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -39,6 +56,9 @@ pub fn build(b: *std.Build) void {
         // Later on we'll use this module as the root module of a test executable
         // which requires us to specify a target.
         .target = target,
+        .imports = &.{
+            .{ .name = "coregraphics", .module = coregraphics },
+        },
     });
 
     // Here we define an executable. An executable needs to have a root module
@@ -58,15 +78,13 @@ pub fn build(b: *std.Build) void {
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
 
-    const tc = b.addTranslateC(.{
-        .root_source_file = b.path("src/c.h"),
+    const glwf_tc = b.addTranslateC(.{
+        .root_source_file = b.path("src/bindings/glfw.h"),
         .target = target,
         .optimize = optimize,
     });
 
-    tc.linkSystemLibrary("glfw3", .{});
-
-    const c_module = tc.createModule();
+    glwf_tc.linkSystemLibrary("glfw3", .{});
 
     const exe = b.addExecutable(.{
         .name = "zigui",
@@ -90,10 +108,35 @@ pub fn build(b: *std.Build) void {
                 // can be extremely useful in case of collisions (which can happen
                 // importing modules from different packages).
                 .{ .name = "zigui", .module = mod },
-                .{ .name = "c", .module = c_module },
+                .{ .name = "glfw", .module = glwf_tc.createModule() },
+                .{ .name = "coregraphics", .module = coregraphics },
             },
         }),
     });
+
+    exe.root_module.addCSourceFile(.{
+        .file = b.path(
+            "src/platform/macos_shim.m",
+        ),
+        .flags = &.{
+            "-fobjc-arc",
+        },
+    });
+
+    exe.root_module.linkFramework(
+        "AppKit",
+        .{},
+    );
+
+    exe.root_module.linkFramework(
+        "CoreGraphics",
+        .{},
+    );
+
+    exe.root_module.linkSystemLibrary(
+        "glfw",
+        .{},
+    );
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default

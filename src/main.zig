@@ -3,61 +3,78 @@ const Io = std.Io;
 
 const zigui = @import("zigui");
 
-const c = @import("c");
+const glfw = @import("glfw");
+const cg = @import("coregraphics");
+const macos = @import("platform/macos.zig");
+
+fn cBool(val: c_int) bool {
+    return val != 0;
+}
 
 pub fn main(init: std.process.Init) !void {
     _ = init;
-    _ = c.glfwInit();
+    if (glfw.glfwInit() != glfw.GLFW_TRUE)
+        return error.GlfwInitFailed;
 
-    const window = c.glfwCreateWindow(
-        800,
-        600,
-        "windowwww",
-        null,
-        null,
+    defer glfw.glfwTerminate();
+
+    glfw.glfwWindowHint(
+        glfw.GLFW_CLIENT_API,
+        glfw.GLFW_NO_API,
     );
 
-    while (c.glfwWindowShouldClose(window) == 0) {
-        c.glfwPollEvents();
-        c.glfwSwapBuffers(window);
+    const window = glfw.glfwCreateWindow(
+        800,
+        600,
+        "zig gui",
+        null,
+        null,
+    ) orelse return error.WindowCreationFailed;
+
+    defer glfw.glfwDestroyWindow(window);
+
+    const view = try macos.attach(window);
+    defer macos.detach(view);
+
+    while (glfw.glfwWindowShouldClose(window) ==
+        glfw.GLFW_FALSE)
+    {
+        macos.redraw(view);
+
+        glfw.glfwPollEvents();
     }
 }
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+export fn zig_gui_draw(
+    raw_context: ?*anyopaque,
+    width: f64,
+    height: f64,
+) callconv(.c) void {
+    _ = width;
+    _ = height;
 
-test "fuzz example" {
-    try std.testing.fuzz({}, testOne, .{});
-}
+    const raw = raw_context orelse return;
 
-fn testOne(context: void, smith: *std.testing.Smith) !void {
-    _ = context;
-    // Try passing `--fuzz` to `zig build test` and see if it manages to fail this test case!
+    const ctx: cg.CGContextRef = @ptrCast(raw);
 
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(u8) = .empty;
-    defer list.deinit(gpa);
-    while (!smith.eos()) switch (smith.value(enum { add_data, dup_data })) {
-        .add_data => {
-            const slice = try list.addManyAsSlice(gpa, smith.value(u4));
-            smith.bytes(slice);
+    cg.CGContextSetRGBFillColor(
+        ctx,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+    );
+
+    const rect: cg.CGRect = .{
+        .origin = .{
+            .x = 50,
+            .y = 50,
         },
-        .dup_data => {
-            if (list.items.len == 0) continue;
-            if (list.items.len > std.math.maxInt(u32)) return error.SkipZigTest;
-            const len = smith.valueRangeAtMost(u32, 1, @min(32, list.items.len));
-            const off = smith.valueRangeAtMost(u32, 0, @intCast(list.items.len - len));
-            try list.appendSlice(gpa, list.items[off..][0..len]);
-            try std.testing.expectEqualSlices(
-                u8,
-                list.items[off..][0..len],
-                list.items[list.items.len - len ..],
-            );
+        .size = .{
+            .width = 200,
+            .height = 100,
         },
     };
+
+    cg.CGContextFillRect(ctx, rect);
 }
