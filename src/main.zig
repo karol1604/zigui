@@ -47,12 +47,29 @@ pub fn main(init: std.process.Init) !void {
     const view = try macos.attach(window, &render_state);
     defer macos.detach(view);
 
+    var input_state: zigui.InputState = .{};
+    var ui: zigui.Ui = .{};
+
+    _ = glfw.glfwSetWindowUserPointer(window, @ptrCast(&input_state));
+
+    _ = glfw.glfwSetCursorPosCallback(window, cursorPosCallback);
+    _ = glfw.glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    _ = glfw.glfwSetWindowFocusCallback(window, windowFocusCallback);
+
     while (!cBool(glfw.glfwWindowShouldClose(window))) {
+        var width: c_int = 0;
+        var height: c_int = 0;
+        glfw.glfwGetFramebufferSize(window, &width, &height);
+
+        input_state.beginFrame();
+
         glfw.glfwPollEvents();
         render_state.draw_list.reset();
+        ui.beginFrame(&input_state, &render_state.draw_list);
+        defer ui.endFrame();
 
         try render_state.draw_list.addRect(
-            Rect.init(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT),
+            Rect.init(0, 0, @floatFromInt(width), @floatFromInt(height)),
             .{
                 .fill = zigui.Color.rgba(0.1, 0.1, 0.1, 1.0),
             },
@@ -62,21 +79,8 @@ pub fn main(init: std.process.Init) !void {
         var ypos: f64 = 0;
         glfw.glfwGetCursorPos(window, &xpos, &ypos);
 
-        try render_state.draw_list.addRect(
-            ex_rect,
-            .{
-                .stroke = zigui.Color.rgba(0.1, 0.5, 0.1, 1.0),
-                .fill = zigui.Color.rgba(0.1, 0.1, 0.5, 1.0),
-            },
-        );
-
-        if (ex_rect.contains(zigui.vec2(xpos, ypos))) {
-            try render_state.draw_list.addRect(
-                ex_rect,
-                .{
-                    .fill = zigui.Color.rgba(0.5, 0.1, 0.1, 1.0),
-                },
-            );
+        if (try ui.button(1, ex_rect)) {
+            std.log.info("Button clicked!", .{});
         }
 
         try render_state.draw_list.addCircle(
@@ -129,6 +133,55 @@ pub fn main(init: std.process.Init) !void {
     }
 }
 
+fn getInputState(
+    window: ?*glfw.GLFWwindow,
+) ?*zigui.InputState {
+    const actual_window = window orelse return null;
+
+    const raw =
+        glfw.glfwGetWindowUserPointer(actual_window) orelse
+        return null;
+
+    return @ptrCast(@alignCast(raw));
+}
+
+fn cursorPosCallback(window: ?*glfw.GLFWwindow, x: f64, y: f64) callconv(.c) void {
+    const input_state = getInputState(window) orelse return;
+    input_state.mouse_pos = zigui.vec2(x, y);
+}
+
+fn mouseButtonCallback(
+    window: ?*glfw.GLFWwindow,
+    button: c_int,
+    action: c_int,
+    _: c_int,
+) callconv(.c) void {
+    const input = getInputState(window) orelse return;
+
+    if (button != glfw.GLFW_MOUSE_BUTTON_LEFT)
+        return;
+
+    switch (action) {
+        glfw.GLFW_PRESS => input.setMouseButton(true),
+        glfw.GLFW_RELEASE => input.setMouseButton(false),
+        else => {},
+    }
+}
+
+fn windowFocusCallback(
+    window: ?*glfw.GLFWwindow,
+    focused: c_int,
+) callconv(.c) void {
+    const input = getInputState(window) orelse return;
+
+    if (!cBool(focused)) {
+        if (input.mouse_button_left.down)
+            input.mouse_button_left.released = true;
+
+        input.mouse_button_left.down = false;
+    }
+}
+
 export fn zig_gui_draw(
     raw_render_state: ?*anyopaque,
     raw_context: ?*anyopaque,
@@ -146,6 +199,4 @@ export fn zig_gui_draw(
     render_state.render(ctx) catch |err| {
         std.log.err("CoreGraphics rendering failed: {}", .{err});
     };
-
-    //
 }

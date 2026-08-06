@@ -56,6 +56,8 @@ void *gui_macos_attach(void *raw_window, void *raw_render_state) {
 void gui_macos_redraw(void *raw_view) {
   ZigGuiView *view = (__bridge ZigGuiView *)raw_view;
 
+  [view displayIfNeeded];
+
   view.needsDisplay = YES;
 }
 
