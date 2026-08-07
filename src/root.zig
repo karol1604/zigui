@@ -1,6 +1,7 @@
 const draw = @import("draw.zig");
 const ui = @import("ui.zig");
 const coregraphics_renderer = @import("coregraphics_renderer.zig");
+pub const metal_renderer = @import("metal_renderer.zig");
 
 pub const cg = coregraphics_renderer.cg;
 
@@ -23,3 +24,7 @@ pub const Ui = ui.Ui;
 
 pub const RendererState = coregraphics_renderer.RendererState;
 pub const CGRenderer = coregraphics_renderer.CGRenderer;
+
+pub const MetalRenderer = metal_renderer.MetalRenderer;
+pub const Vertex = metal_renderer.Vertex;
+pub const FrameUniforms = metal_renderer.FrameUniforms;

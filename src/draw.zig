@@ -3,6 +3,10 @@ const std = @import("std");
 pub const Vec2 = struct {
     x: f64,
     y: f64,
+
+    pub fn tof32(self: Vec2) struct { x: f32, y: f32 } {
+        return .{ .x = @floatCast(self.x), .y = @floatCast(self.y) };
+    }
 };
 
 pub fn vec2(x: f64, y: f64) Vec2 {

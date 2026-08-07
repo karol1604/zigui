@@ -3,6 +3,7 @@ const std = @import("std");
 const glfw = @import("glfw");
 const metal = @import("metalzig");
 const macos = @import("platform/macos.zig");
+const zigui = @import("zigui");
 
 fn cBool(val: c_int) bool {
     return val != 0;
@@ -11,39 +12,8 @@ fn cBool(val: c_int) bool {
 const WINDOW_WIDTH = 800;
 const WINDOW_HEIGHT = 600;
 
-pub fn main(_: std.process.Init) !void {
-    const shader_source =
-        \\#include <metal_stdlib>
-        \\using namespace metal;
-        \\
-        \\struct VertexOut {
-        \\    float4 position [[position]];
-        \\    float4 color;
-        \\};
-        \\
-        \\vertex VertexOut vertex_main(uint id [[vertex_id]]) {
-        \\    float2 positions[3] = {
-        \\        float2( 0.0,  0.5),
-        \\        float2(-0.5, -0.5),
-        \\        float2( 0.5, -0.5),
-        \\    };
-        \\
-        \\    float4 colors[3] = {
-        \\        float4(1, 0, 0, 1),
-        \\        float4(0, 1, 0, 1),
-        \\        float4(0, 0, 1, 1),
-        \\    };
-        \\
-        \\    VertexOut out;
-        \\    out.position = float4(positions[id], 0, 1);
-        \\    out.color = colors[id];
-        \\    return out;
-        \\}
-        \\
-        \\fragment float4 fragment_main(VertexOut in [[stage_in]]) {
-        \\    return in.color;
-        \\}
-    ;
+pub fn main(init: std.process.Init) !void {
+    const alloc = init.arena.allocator();
 
     if (!cBool(glfw.glfwInit()))
         return error.GlfwInitFailed;
@@ -66,77 +36,126 @@ pub fn main(_: std.process.Init) !void {
     var device = try metal.Device.systemDefault();
     defer device.deinit();
 
-    var command_queue = try device.newCommandQueue();
-    defer command_queue.deinit();
+    var renderer = try zigui.MetalRenderer.init(alloc, &device);
+    defer renderer.deinit();
 
     var layer = try device.newMetalLayer();
     defer layer.deinit();
+
     layer.setPixelFormat(.bgra8_unorm);
     layer.setFramebufferOnly(true);
 
     const view = try macos.attach(window, layer.nativeHandle());
     defer macos.detach(view);
-    _ = &command_queue;
 
-    const library = try device.newLibraryWithSource(shader_source);
+    var draw_list = try zigui.DrawList.init(alloc);
+    defer draw_list.deinit();
+    var ui: zigui.Ui = .{};
+    var input_state: zigui.InputState = .{};
 
-    const vertex_fn = try library.newFunctionWithName("vertex_main");
-    const fragment_fn = try library.newFunctionWithName("fragment_main");
+    _ = glfw.glfwSetWindowUserPointer(window, @ptrCast(&input_state));
 
-    const pipeline_desc = metal.RenderPipelineDescriptor{
-        .vertex_function = &vertex_fn,
-        .fragment_function = &fragment_fn,
-        .color_attachment = metal.ColorAttachmentDescriptor{
-            .pixel_format = .bgra8_unorm,
-        },
-    };
-    const pipeline = try device.newRenderPipelineState(pipeline_desc);
+    _ = glfw.glfwSetCursorPosCallback(window, cursorPosCallback);
+    _ = glfw.glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    _ = glfw.glfwSetWindowFocusCallback(window, windowFocusCallback);
 
     while (!cBool(glfw.glfwWindowShouldClose(window))) {
+        input_state.beginFrame();
         glfw.glfwPollEvents();
 
-        var width: c_int = 0;
-        var height: c_int = 0;
-        glfw.glfwGetFramebufferSize(window, &width, &height);
+        var fb_width: c_int = 0;
+        var fb_height: c_int = 0;
+        glfw.glfwGetFramebufferSize(window, &fb_width, &fb_height);
 
-        if (width <= 0 or height <= 0)
+        var logical_width: c_int = 0;
+        var logical_height: c_int = 0;
+        glfw.glfwGetWindowSize(window, &logical_width, &logical_height);
+
+        if (fb_width <= 0 or fb_height <= 0)
             continue;
 
         macos.resizeDrawable(
             view,
-            @intCast(width),
-            @intCast(height),
+            @intCast(fb_width),
+            @intCast(fb_height),
         );
 
-        const drawable = layer.nextDrawable() catch continue;
-        const pass = metal.RenderPassDescriptor{
-            .color_texture = &(try drawable.texture()),
-            .load_action = .clear,
-            .store_action = .store,
-            .clear_color = metal.ClearColor{
-                .red = 0.1,
-                .green = 0.1,
-                .blue = 0.1,
-                .alpha = 1.0,
+        draw_list.reset();
+        ui.beginFrame(&input_state, &draw_list);
+
+        try draw_list.addRect(
+            zigui.Rect.init(100, 100, 400, 400),
+            .{
+                // .fill = zigui.Color.rgb(1, 0.4, 0.6),
+                .stroke = zigui.Color.rgb(0, 1, 0.2),
+                .stroke_width = 50,
             },
-        };
+        );
+        try draw_list.addLine(
+            zigui.vec2(100, 100),
+            zigui.vec2(500, 500),
+            .{
+                .color = zigui.Color.rgb(0.2, 0.4, 1),
+                .width = 1,
+            },
+        );
 
-        var command_buffer = try command_queue.newCommandBuffer();
-        var encoder = try command_buffer.newRenderCommandEncoder(pass);
-        encoder.setRenderPipelineState(&pipeline);
-        try encoder.setViewport(.{
-            .origin_x = 0,
-            .origin_y = 0,
-            .width = @floatFromInt(width),
-            .height = @floatFromInt(height),
-            .znear = 0,
-            .zfar = 1,
-        });
+        ui.endFrame();
 
-        try encoder.drawPrimitives(.triangle, 0, 3, 1);
-        try encoder.endEncoding();
+        try renderer.render(
+            &layer,
+            &draw_list,
+            .{ @floatFromInt(logical_width), @floatFromInt(logical_height) },
+            .{ @intCast(fb_width), @intCast(fb_height) },
+        );
+    }
+}
 
-        try command_buffer.present(&drawable);
-        try command_buffer.commit();
+fn getInputState(
+    window: ?*glfw.GLFWwindow,
+) ?*zigui.InputState {
+    const actual_window = window orelse return null;
+
+    const raw =
+        glfw.glfwGetWindowUserPointer(actual_window) orelse
+        return null;
+
+    return @ptrCast(@alignCast(raw));
+}
+
+fn cursorPosCallback(window: ?*glfw.GLFWwindow, x: f64, y: f64) callconv(.c) void {
+    const input_state = getInputState(window) orelse return;
+    input_state.mouse_pos = zigui.vec2(x, y);
+}
+
+fn mouseButtonCallback(
+    window: ?*glfw.GLFWwindow,
+    button: c_int,
+    action: c_int,
+    _: c_int,
+) callconv(.c) void {
+    const input = getInputState(window) orelse return;
+
+    if (button != glfw.GLFW_MOUSE_BUTTON_LEFT)
+        return;
+
+    switch (action) {
+        glfw.GLFW_PRESS => input.setMouseButton(true),
+        glfw.GLFW_RELEASE => input.setMouseButton(false),
+        else => {},
+    }
+}
+
+fn windowFocusCallback(
+    window: ?*glfw.GLFWwindow,
+    focused: c_int,
+) callconv(.c) void {
+    const input = getInputState(window) orelse return;
+
+    if (!cBool(focused)) {
+        if (input.mouse_button_left.down)
+            input.mouse_button_left.released = true;
+
+        input.mouse_button_left.down = false;
     }
 }
