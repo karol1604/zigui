@@ -17,6 +17,12 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const metal_zig_dependency = b.dependency("metal_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const metalzig = metal_zig_dependency.module("metalzig");
+
     const coregraphics = b.createModule(.{
         .root_source_file = b.path("src/bindings/coregraphics.zig"),
         .target = target,
@@ -32,6 +38,7 @@ pub fn build(b: *std.Build) void {
         });
     }
     coregraphics.linkFramework("CoreGraphics", .{});
+    coregraphics.linkFramework("CoreText", .{});
 
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
@@ -58,6 +65,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "coregraphics", .module = coregraphics },
+            .{ .name = "metalzig", .module = metalzig },
         },
     });
 
@@ -110,6 +118,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "zigui", .module = mod },
                 .{ .name = "glfw", .module = glwf_tc.createModule() },
                 .{ .name = "coregraphics", .module = coregraphics },
+                .{ .name = "metalzig", .module = metalzig },
             },
         }),
     });
@@ -125,6 +134,14 @@ pub fn build(b: *std.Build) void {
 
     exe.root_module.linkFramework(
         "AppKit",
+        .{},
+    );
+    exe.root_module.linkFramework(
+        "Metal",
+        .{},
+    );
+    exe.root_module.linkFramework(
+        "QuartzCore",
         .{},
     );
 

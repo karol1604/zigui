@@ -1,27 +1,52 @@
 const std = @import("std");
-const Io = std.Io;
-
-const zigui = @import("zigui");
 
 const glfw = @import("glfw");
-const cg = zigui.cg;
+const metal = @import("metalzig");
 const macos = @import("platform/macos.zig");
-
-const Rect = zigui.Rect;
 
 fn cBool(val: c_int) bool {
     return val != 0;
 }
 
-const WINDOW_WIDTH: usize = 800;
-const WINDOW_HEIGHT: usize = 600;
+const WINDOW_WIDTH = 800;
+const WINDOW_HEIGHT = 600;
 
-const ex_rect = Rect.init(50, 50, 700, 100);
+pub fn main(_: std.process.Init) !void {
+    const shader_source =
+        \\#include <metal_stdlib>
+        \\using namespace metal;
+        \\
+        \\struct VertexOut {
+        \\    float4 position [[position]];
+        \\    float4 color;
+        \\};
+        \\
+        \\vertex VertexOut vertex_main(uint id [[vertex_id]]) {
+        \\    float2 positions[3] = {
+        \\        float2( 0.0,  0.5),
+        \\        float2(-0.5, -0.5),
+        \\        float2( 0.5, -0.5),
+        \\    };
+        \\
+        \\    float4 colors[3] = {
+        \\        float4(1, 0, 0, 1),
+        \\        float4(0, 1, 0, 1),
+        \\        float4(0, 0, 1, 1),
+        \\    };
+        \\
+        \\    VertexOut out;
+        \\    out.position = float4(positions[id], 0, 1);
+        \\    out.color = colors[id];
+        \\    return out;
+        \\}
+        \\
+        \\fragment float4 fragment_main(VertexOut in [[stage_in]]) {
+        \\    return in.color;
+        \\}
+    ;
 
-pub fn main(init: std.process.Init) !void {
     if (!cBool(glfw.glfwInit()))
         return error.GlfwInitFailed;
-
     defer glfw.glfwTerminate();
 
     glfw.glfwWindowHint(
@@ -32,171 +57,86 @@ pub fn main(init: std.process.Init) !void {
     const window = glfw.glfwCreateWindow(
         WINDOW_WIDTH,
         WINDOW_HEIGHT,
-        "zig gui",
+        "zig gui + metal",
         null,
         null,
     ) orelse return error.WindowCreationFailed;
-
     defer glfw.glfwDestroyWindow(window);
 
-    const alloc = init.arena.allocator();
+    var device = try metal.Device.systemDefault();
+    defer device.deinit();
 
-    var render_state = try zigui.RendererState.init(alloc);
-    defer render_state.deinit();
+    var command_queue = try device.newCommandQueue();
+    defer command_queue.deinit();
 
-    const view = try macos.attach(window, &render_state);
+    var layer = try device.newMetalLayer();
+    defer layer.deinit();
+    layer.setPixelFormat(.bgra8_unorm);
+    layer.setFramebufferOnly(true);
+
+    const view = try macos.attach(window, layer.nativeHandle());
     defer macos.detach(view);
+    _ = &command_queue;
 
-    var input_state: zigui.InputState = .{};
-    var ui: zigui.Ui = .{};
+    const library = try device.newLibraryWithSource(shader_source);
 
-    _ = glfw.glfwSetWindowUserPointer(window, @ptrCast(&input_state));
+    const vertex_fn = try library.newFunctionWithName("vertex_main");
+    const fragment_fn = try library.newFunctionWithName("fragment_main");
 
-    _ = glfw.glfwSetCursorPosCallback(window, cursorPosCallback);
-    _ = glfw.glfwSetMouseButtonCallback(window, mouseButtonCallback);
-    _ = glfw.glfwSetWindowFocusCallback(window, windowFocusCallback);
+    const pipeline_desc = metal.RenderPipelineDescriptor{
+        .vertex_function = &vertex_fn,
+        .fragment_function = &fragment_fn,
+        .color_attachment = metal.ColorAttachmentDescriptor{
+            .pixel_format = .bgra8_unorm,
+        },
+    };
+    const pipeline = try device.newRenderPipelineState(pipeline_desc);
 
     while (!cBool(glfw.glfwWindowShouldClose(window))) {
+        glfw.glfwPollEvents();
+
         var width: c_int = 0;
         var height: c_int = 0;
         glfw.glfwGetFramebufferSize(window, &width, &height);
 
-        input_state.beginFrame();
+        if (width <= 0 or height <= 0)
+            continue;
 
-        glfw.glfwPollEvents();
-        render_state.draw_list.reset();
-        ui.beginFrame(&input_state, &render_state.draw_list);
-        defer ui.endFrame();
-
-        try render_state.draw_list.addRect(
-            Rect.init(0, 0, @floatFromInt(width), @floatFromInt(height)),
-            .{
-                .fill = zigui.Color.rgba(0.1, 0.1, 0.1, 1.0),
-            },
+        macos.resizeDrawable(
+            view,
+            @intCast(width),
+            @intCast(height),
         );
 
-        var xpos: f64 = 0;
-        var ypos: f64 = 0;
-        glfw.glfwGetCursorPos(window, &xpos, &ypos);
-
-        if (try ui.button(1, ex_rect)) {
-            std.log.info("Button clicked!", .{});
-        }
-
-        try render_state.draw_list.addCircle(
-            zigui.vec2(400, 300),
-            100,
-            .{
-                .fill = zigui.Color.fromHex(0x80fc03),
-                .stroke = zigui.Color.fromHex(0x03b1fc),
-                .stroke_width = 20,
+        const drawable = layer.nextDrawable() catch continue;
+        const pass = metal.RenderPassDescriptor{
+            .color_texture = &(try drawable.texture()),
+            .load_action = .clear,
+            .store_action = .store,
+            .clear_color = metal.ClearColor{
+                .red = 0.1,
+                .green = 0.1,
+                .blue = 0.1,
+                .alpha = 1.0,
             },
-        );
+        };
 
-        try render_state.draw_list.addCircle(
-            zigui.vec2(400, 300),
-            50,
-            zigui.Paint{
-                .fill = zigui.Color.fromHex(0xfc03ca),
-                .stroke_width = 20,
-            },
-        );
+        var command_buffer = try command_queue.newCommandBuffer();
+        var encoder = try command_buffer.newRenderCommandEncoder(pass);
+        encoder.setRenderPipelineState(&pipeline);
+        try encoder.setViewport(.{
+            .origin_x = 0,
+            .origin_y = 0,
+            .width = @floatFromInt(width),
+            .height = @floatFromInt(height),
+            .znear = 0,
+            .zfar = 1,
+        });
 
-        try render_state.draw_list.addCircle(
-            zigui.vec2(400, 300),
-            25,
-            zigui.Paint{
-                .fill = zigui.Color.fromHex(0x03fcd3),
-                .stroke_width = 20,
-            },
-        );
+        try encoder.drawPrimitives(.triangle, 0, 3, 1);
+        try encoder.endEncoding();
 
-        try render_state.draw_list.addLine(
-            zigui.vec2(100, 300),
-            zigui.vec2(700, 300),
-            .{
-                .color = zigui.Color.fromHex(0x7703fc),
-                .width = 5,
-            },
-        );
-
-        try render_state.draw_list.addLine(
-            zigui.vec2(400, 100),
-            zigui.vec2(400, 500),
-            .{
-                .color = zigui.Color.fromHex(0x7703fc),
-                .width = 5,
-            },
-        );
-
-        macos.redraw(view);
+        try command_buffer.present(&drawable);
+        try command_buffer.commit();
     }
-}
-
-fn getInputState(
-    window: ?*glfw.GLFWwindow,
-) ?*zigui.InputState {
-    const actual_window = window orelse return null;
-
-    const raw =
-        glfw.glfwGetWindowUserPointer(actual_window) orelse
-        return null;
-
-    return @ptrCast(@alignCast(raw));
-}
-
-fn cursorPosCallback(window: ?*glfw.GLFWwindow, x: f64, y: f64) callconv(.c) void {
-    const input_state = getInputState(window) orelse return;
-    input_state.mouse_pos = zigui.vec2(x, y);
-}
-
-fn mouseButtonCallback(
-    window: ?*glfw.GLFWwindow,
-    button: c_int,
-    action: c_int,
-    _: c_int,
-) callconv(.c) void {
-    const input = getInputState(window) orelse return;
-
-    if (button != glfw.GLFW_MOUSE_BUTTON_LEFT)
-        return;
-
-    switch (action) {
-        glfw.GLFW_PRESS => input.setMouseButton(true),
-        glfw.GLFW_RELEASE => input.setMouseButton(false),
-        else => {},
-    }
-}
-
-fn windowFocusCallback(
-    window: ?*glfw.GLFWwindow,
-    focused: c_int,
-) callconv(.c) void {
-    const input = getInputState(window) orelse return;
-
-    if (!cBool(focused)) {
-        if (input.mouse_button_left.down)
-            input.mouse_button_left.released = true;
-
-        input.mouse_button_left.down = false;
-    }
-}
-
-export fn zig_gui_draw(
-    raw_render_state: ?*anyopaque,
-    raw_context: ?*anyopaque,
-    width: f64,
-    height: f64,
-) callconv(.c) void {
-    _ = width;
-    _ = height;
-    const raw = raw_context orelse return;
-
-    const ctx: cg.CGContextRef = @ptrCast(raw);
-    const render_state: *zigui.RendererState =
-        @ptrCast(@alignCast(raw_render_state orelse return));
-
-    render_state.render(ctx) catch |err| {
-        std.log.err("CoreGraphics rendering failed: {}", .{err});
-    };
 }

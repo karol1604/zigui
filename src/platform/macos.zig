@@ -1,25 +1,28 @@
 extern fn gui_macos_attach(
     window: *anyopaque,
-    render_state: *anyopaque,
+    metal_layer: *anyopaque,
 ) ?*anyopaque;
 
-extern fn gui_macos_redraw(
+extern fn gui_macos_resize_drawable(
     view: *anyopaque,
+    width: usize,
+    height: usize,
 ) void;
 
-extern fn gui_macos_detach(
-    view: *anyopaque,
-) void;
+extern fn gui_macos_detach(view: *anyopaque) void;
 
-pub fn attach(window: anytype, render_state: anytype) !*anyopaque {
+/// Attaches a caller-owned CAMetalLayer to a child view of a GLFW Cocoa window.
+pub fn attach(window: anytype, metal_layer: anytype) !*anyopaque {
     return gui_macos_attach(
         @ptrCast(window),
-        @ptrCast(render_state),
-    ) orelse error.MacOSViewCreationFailed;
+        @ptrCast(metal_layer),
+    ) orelse
+        error.MacOSViewCreationFailed;
 }
 
-pub fn redraw(view: *anyopaque) void {
-    gui_macos_redraw(view);
+/// Updates CAMetalLayer.drawableSize using physical framebuffer pixels.
+pub fn resizeDrawable(view: *anyopaque, width: usize, height: usize) void {
+    gui_macos_resize_drawable(view, width, height);
 }
 
 pub fn detach(view: *anyopaque) void {

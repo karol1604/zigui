@@ -1,19 +1,17 @@
 #import <Cocoa/Cocoa.h>
-#include <CoreGraphics/CoreGraphics.h>
+#import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
 
 #define GLFW_EXPOSE_NATIVE_COCOA
 
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
 
-extern void zig_gui_draw(void *render_state, void *context, double width,
-                         double height);
-
-@interface ZigGuiView : NSView
-@property(nonatomic, assign) void *renderState;
+@interface ZigGuiMetalView : NSView
 @end
 
-@implementation ZigGuiView
+@implementation ZigGuiMetalView
+
 - (BOOL)isFlipped {
   return YES;
 }
@@ -24,46 +22,46 @@ extern void zig_gui_draw(void *render_state, void *context, double width,
 }
 
 - (BOOL)isOpaque {
-  return NO;
-}
-
-- (void)drawRect:(NSRect)dirtyRect {
-  (void)dirtyRect;
-
-  CGContextRef context = [[NSGraphicsContext currentContext] CGContext];
-
-  zig_gui_draw(self.renderState, (void *)context, self.bounds.size.width,
-               self.bounds.size.height);
+  return YES;
 }
 
 @end
 
-void *gui_macos_attach(void *raw_window, void *raw_render_state) {
+void *gui_macos_attach(void *raw_window, void *raw_metal_layer) {
   GLFWwindow *window = (GLFWwindow *)raw_window;
-
   NSView *glfw_view = glfwGetCocoaView(window);
+  CAMetalLayer *layer = (__bridge CAMetalLayer *)raw_metal_layer;
 
-  ZigGuiView *view = [[ZigGuiView alloc] initWithFrame:glfw_view.bounds];
-  view.renderState = raw_render_state;
+  ZigGuiMetalView *view =
+      [[ZigGuiMetalView alloc] initWithFrame:glfw_view.bounds];
+  if (view == nil) {
+    return NULL;
+  }
 
+  view.wantsLayer = YES;
+  view.layer = layer;
   view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  layer.opaque = YES;
 
   [glfw_view addSubview:view];
+
+  CGFloat scale = glfw_view.window.backingScaleFactor;
+  layer.contentsScale = scale;
+  layer.drawableSize = CGSizeMake(view.bounds.size.width * scale,
+                                  view.bounds.size.height * scale);
 
   return (__bridge_retained void *)view;
 }
 
-void gui_macos_redraw(void *raw_view) {
-  ZigGuiView *view = (__bridge ZigGuiView *)raw_view;
+void gui_macos_resize_drawable(void *raw_view, size_t width, size_t height) {
+  ZigGuiMetalView *view = (__bridge ZigGuiMetalView *)raw_view;
+  CAMetalLayer *layer = (CAMetalLayer *)view.layer;
 
-  [view displayIfNeeded];
-
-  view.needsDisplay = YES;
+  layer.contentsScale = view.window.backingScaleFactor;
+  layer.drawableSize = CGSizeMake((CGFloat)width, (CGFloat)height);
 }
 
 void gui_macos_detach(void *raw_view) {
-  ZigGuiView *view = (__bridge_transfer ZigGuiView *)raw_view;
-  view.renderState = NULL;
-
+  ZigGuiMetalView *view = (__bridge_transfer ZigGuiMetalView *)raw_view;
   [view removeFromSuperview];
 }
