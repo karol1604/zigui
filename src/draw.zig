@@ -38,6 +38,61 @@ pub const Color = struct {
     b: f32,
     a: f32,
 
+    pub const Transparent = Color.rgba(0.0, 0.0, 0.0, 0.0);
+
+    pub const Black = Color.fromHex(0x000000);
+    pub const White = Color.fromHex(0xFFFFFF);
+
+    pub const Red = Color.fromHex(0xFF0000);
+    pub const Green = Color.fromHex(0x008000);
+    pub const Blue = Color.fromHex(0x0000FF);
+
+    pub const Yellow = Color.fromHex(0xFFFF00);
+    pub const Cyan = Color.fromHex(0x00FFFF);
+    pub const Magenta = Color.fromHex(0xFF00FF);
+
+    pub const Orange = Color.fromHex(0xFFA500);
+    pub const Purple = Color.fromHex(0x800080);
+    pub const Pink = Color.fromHex(0xFFC0CB);
+    pub const Brown = Color.fromHex(0xA52A2A);
+
+    pub const Gray = Color.fromHex(0x808080);
+    pub const Grey = Gray;
+    pub const LightGray = Color.fromHex(0xD3D3D3);
+    pub const DarkGray = Color.fromHex(0x404040);
+    pub const Silver = Color.fromHex(0xC0C0C0);
+
+    pub const Maroon = Color.fromHex(0x800000);
+    pub const Olive = Color.fromHex(0x808000);
+    pub const Lime = Color.fromHex(0x00FF00);
+    pub const Teal = Color.fromHex(0x008080);
+    pub const Navy = Color.fromHex(0x000080);
+    pub const Aqua = Color.fromHex(0x00FFFF);
+    pub const Fuchsia = Color.fromHex(0xFF00FF);
+
+    pub const Coral = Color.fromHex(0xFF7F50);
+    pub const Salmon = Color.fromHex(0xFA8072);
+    pub const Gold = Color.fromHex(0xFFD700);
+    pub const Beige = Color.fromHex(0xF5F5DC);
+    pub const Ivory = Color.fromHex(0xFFFFF0);
+    pub const Khaki = Color.fromHex(0xF0E68C);
+    pub const Violet = Color.fromHex(0xEE82EE);
+    pub const Indigo = Color.fromHex(0x4B0082);
+    pub const Lavender = Color.fromHex(0xE6E6FA);
+
+    pub const Turquoise = Color.fromHex(0x40E0D0);
+    pub const Mint = Color.fromHex(0x98FF98);
+    pub const SkyBlue = Color.fromHex(0x87CEEB);
+    pub const RoyalBlue = Color.fromHex(0x4169E1);
+
+    pub const Crimson = Color.fromHex(0xDC143C);
+    pub const Tomato = Color.fromHex(0xFF6347);
+    pub const Chocolate = Color.fromHex(0xD2691E);
+    pub const Tan = Color.fromHex(0xD2B48C);
+
+    pub const Charcoal = Color.fromHex(0x36454F);
+    pub const Slate = Color.fromHex(0x708090);
+
     /// The components are expected to be in the range [0.0, 1.0].
     pub fn rgba(r: f32, g: f32, b: f32, a: f32) Color {
         return .{

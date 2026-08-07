@@ -42,6 +42,7 @@ pub fn main(init: std.process.Init) !void {
     var layer = try device.newMetalLayer();
     defer layer.deinit();
 
+    // NOTE: has to be the same as the pipeline descriptor in the renderer!
     layer.setPixelFormat(.bgra8_unorm);
     layer.setFramebufferOnly(true);
 
@@ -83,20 +84,27 @@ pub fn main(init: std.process.Init) !void {
         draw_list.reset();
         ui.beginFrame(&input_state, &draw_list);
 
+        if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50))) {
+            std.log.info("Button 1 pressed!", .{});
+        }
+        if (try ui.button(2, zigui.Rect.init(150, 25, 100, 50))) {
+            std.log.info("Button 2 pressed!", .{});
+        }
+
         try draw_list.addRect(
             zigui.Rect.init(100, 100, 400, 400),
             .{
-                // .fill = zigui.Color.rgb(1, 0.4, 0.6),
-                .stroke = zigui.Color.rgb(0, 1, 0.2),
-                .stroke_width = 50,
+                .fill = zigui.Color.rgb(1, 0.4, 0.6),
+                .stroke = zigui.Color.fromHex(0x6642f5),
+                .stroke_width = 20,
             },
         );
         try draw_list.addLine(
             zigui.vec2(100, 100),
             zigui.vec2(500, 500),
             .{
-                .color = zigui.Color.rgb(0.2, 0.4, 1),
-                .width = 1,
+                .color = zigui.Color.Slate,
+                .width = 5,
             },
         );
 
