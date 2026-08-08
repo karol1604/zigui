@@ -21,6 +21,8 @@ pub const MetalRenderer = struct {
     command_queue: metal.CommandQueue,
     pipeline: metal.RenderPipelineState,
     vertices: std.ArrayList(Vertex),
+    batches: std.ArrayList(Batch),
+    clip_stack: std.ArrayList(?Rect),
     alloc: std.mem.Allocator,
 
     pub fn init(alloc: std.mem.Allocator, device: *const metal.Device) !MetalRenderer {
@@ -59,6 +61,8 @@ pub const MetalRenderer = struct {
             .command_queue = command_queue,
             .pipeline = pipeline,
             .vertices = .empty,
+            .batches = .empty,
+            .clip_stack = .empty,
             .alloc = alloc,
         };
     }
@@ -67,6 +71,8 @@ pub const MetalRenderer = struct {
         self.command_queue.deinit();
         self.pipeline.deinit();
         self.vertices.deinit(self.alloc);
+        self.batches.deinit(self.alloc);
+        self.clip_stack.deinit(self.alloc);
     }
 
     pub fn render(
@@ -117,48 +123,119 @@ pub const MetalRenderer = struct {
         try render_encoder.setVertexBytes(std.mem.asBytes(&frame_uniforms), 1);
 
         self.vertices.clearRetainingCapacity();
+        self.batches.clearRetainingCapacity();
+        self.clip_stack.clearRetainingCapacity();
 
-        for (draw_list.commands.items) |command| {
+        var active_clip: ?Rect = .{
+            .pos = draw.vec2(0, 0),
+            .size = draw.vec2(logical_size[0], logical_size[1]),
+        };
+        var batch_start: usize = 0;
+
+        try self.clip_stack.append(self.alloc, active_clip);
+
+        command_loop: for (draw_list.commands.items) |command| {
             switch (command) {
-                .rect => |rect| {
-                    if (rect.paint.fill) |fill| {
-                        try appendRect(
-                            &self.vertices,
-                            self.alloc,
-                            rect.rect,
-                            fill,
-                        );
+                .push_clip => |rect| {
+                    if (active_clip) |clip| {
+                        batch_start = try self.finishBatch(batch_start, clip);
                     }
-                    if (rect.paint.stroke) |stroke| {
+
+                    active_clip = if (active_clip) |parent|
+                        parent.intersect(rect)
+                    else
+                        null;
+                    try self.clip_stack.append(self.alloc, active_clip);
+                },
+                .pop_clip => {
+                    // NOTE: for debug
+                    if (active_clip) |cl| {
                         try appendRectStroke(
                             &self.vertices,
                             self.alloc,
-                            rect.rect,
-                            stroke,
-                            rect.paint.stroke_width,
+                            cl,
+                            draw.Color.Lime,
+                            1,
                         );
                     }
+
+                    if (active_clip) |clip| {
+                        batch_start = try self.finishBatch(batch_start, clip);
+                    }
+
+                    if (self.clip_stack.items.len <= 1)
+                        return error.ClipStackUnderflow;
+
+                    _ = self.clip_stack.pop();
+                    active_clip = self.clip_stack.items[self.clip_stack.items.len - 1];
                 },
-                .line => |line| {
-                    try appendLine(
-                        &self.vertices,
-                        self.alloc,
-                        line.start,
-                        line.end,
-                        line.stroke.color,
-                        line.stroke.width,
-                    );
+                else => {
+                    if (active_clip == null) continue :command_loop;
+
+                    switch (command) {
+                        .rect => |rect| {
+                            if (rect.paint.fill) |fill| {
+                                try appendRect(
+                                    &self.vertices,
+                                    self.alloc,
+                                    rect.rect,
+                                    fill,
+                                );
+                            }
+                            if (rect.paint.stroke) |stroke| {
+                                try appendRectStroke(
+                                    &self.vertices,
+                                    self.alloc,
+                                    rect.rect,
+                                    stroke,
+                                    rect.paint.stroke_width,
+                                );
+                            }
+                        },
+                        .line => |line| {
+                            try appendLine(
+                                &self.vertices,
+                                self.alloc,
+                                line.start,
+                                line.end,
+                                line.stroke.color,
+                                line.stroke.width,
+                            );
+                        },
+                        else => {
+                            std.log.warn("Unsupported draw command: {s}", .{@tagName(command)});
+                        },
+                    }
                 },
-                else => {},
             }
         }
+        if (active_clip) |clip| {
+            _ = try self.finishBatch(batch_start, clip);
+        }
 
-        if (self.vertices.items.len > 0) {
+        if (self.clip_stack.items.len != 1) {
+            try render_encoder.endEncoding();
+            return error.UnbalancedClipStack;
+        }
+
+        if (self.batches.items.len > 0) {
             try render_encoder.setVertexBytes(
                 std.mem.sliceAsBytes(self.vertices.items),
                 0,
             );
-            try render_encoder.drawPrimitives(.triangle, 0, self.vertices.items.len, 1);
+
+            for (self.batches.items) |batch| {
+                try render_encoder.setScissorRect(
+                    clipToScissorRect(batch.clip, logical_size, framebuffer_size),
+                );
+
+                try render_encoder.drawPrimitives(
+                    .triangle,
+                    batch.first_vertex,
+                    batch.vertex_count,
+                    1,
+                );
+            }
         }
 
         try render_encoder.endEncoding();
@@ -166,7 +243,59 @@ pub const MetalRenderer = struct {
         try command_buffer.present(&drawable);
         try command_buffer.commit();
     }
+
+    /// Returns the new batch start index after finishing the current batch.
+    fn finishBatch(
+        self: *MetalRenderer,
+        batch_start: usize,
+        active_clip: Rect,
+    ) !usize {
+        const end = self.vertices.items.len;
+
+        if (end == batch_start)
+            return batch_start; // no new vertices, no need to create a batch.
+
+        try self.batches.append(self.alloc, .{
+            .first_vertex = batch_start,
+            .vertex_count = end - batch_start,
+            .clip = active_clip,
+        });
+
+        return end;
+    }
 };
+
+const Batch = struct {
+    first_vertex: usize,
+    vertex_count: usize,
+    clip: Rect,
+};
+
+fn clipToScissorRect(
+    clip: Rect,
+    logical_size: [2]f32,
+    framebuffer_size: [2]u32,
+) metal.ScissorRect {
+    const scale_x = @as(f64, @floatFromInt(framebuffer_size[0])) / logical_size[0];
+    const scale_y = @as(f64, @floatFromInt(framebuffer_size[1])) / logical_size[1];
+
+    const left = std.math.clamp(clip.pos.x, 0, logical_size[0]);
+    const top = std.math.clamp(clip.pos.y, 0, logical_size[1]);
+    const right = std.math.clamp(clip.pos.x + clip.size.x, 0, logical_size[0]);
+    const bottom = std.math.clamp(clip.pos.y + clip.size.y, 0, logical_size[1]);
+
+    const left_fb: usize = @floor(left * scale_x);
+    const top_fb: usize = @floor(top * scale_y);
+    const right_fb: usize = @ceil(right * scale_x);
+    const bottom_fb: usize = @ceil(bottom * scale_y);
+
+    return metal.ScissorRect{
+        .x = left_fb,
+        .y = top_fb,
+        .width = right_fb - left_fb,
+        .height = bottom_fb - top_fb,
+    };
+}
 
 fn appendRect(
     vertices: *std.ArrayList(Vertex),
@@ -174,6 +303,8 @@ fn appendRect(
     rect: Rect,
     color: draw.Color,
 ) !void {
+    if (rect.size.x <= 0 or rect.size.y <= 0) return;
+
     const left: f32 = @floatCast(rect.pos.x);
     const top: f32 = @floatCast(rect.pos.y);
     const right: f32 = @floatCast(rect.pos.x + rect.size.x);
@@ -230,9 +361,6 @@ fn appendRectStroke(
         width,
         middle_height,
     );
-
-    if (stroke_width <= 0) return;
-    if (rect.size.x <= 0 or rect.size.y <= 0) return;
 
     try appendRect(vertices, allocator, left, color);
     try appendRect(vertices, allocator, right, color);

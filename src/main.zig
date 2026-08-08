@@ -13,7 +13,8 @@ const WINDOW_WIDTH = 800;
 const WINDOW_HEIGHT = 600;
 
 pub fn main(init: std.process.Init) !void {
-    const alloc = init.arena.allocator();
+    // const alloc = init.arena.allocator();
+    const alloc = init.gpa;
 
     if (!cBool(glfw.glfwInit()))
         return error.GlfwInitFailed;
@@ -51,7 +52,8 @@ pub fn main(init: std.process.Init) !void {
 
     var draw_list = try zigui.DrawList.init(alloc);
     defer draw_list.deinit();
-    var ui: zigui.Ui = .{};
+    var ui: zigui.Ui = .{ .alloc = alloc };
+    defer ui.deinit();
     var input_state: zigui.InputState = .{};
 
     _ = glfw.glfwSetWindowUserPointer(window, @ptrCast(&input_state));
@@ -84,12 +86,17 @@ pub fn main(init: std.process.Init) !void {
         draw_list.reset();
         ui.beginFrame(&input_state, &draw_list);
 
-        if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50))) {
+        try ui.pushClip(zigui.Rect.init(0, 0, 300, 300));
+
+        if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), zigui.Color.Coral)) {
             std.log.info("Button 1 pressed!", .{});
         }
-        if (try ui.button(2, zigui.Rect.init(150, 25, 100, 50))) {
+        try ui.pushClip(zigui.Rect.init(150, 0, 200, 50));
+
+        if (try ui.button(2, zigui.Rect.init(150, 25, 100, 50), zigui.Color.Teal)) {
             std.log.info("Button 2 pressed!", .{});
         }
+        try ui.popClip();
 
         try draw_list.addRect(
             zigui.Rect.init(100, 100, 400, 400),
@@ -103,8 +110,18 @@ pub fn main(init: std.process.Init) !void {
             zigui.vec2(100, 100),
             zigui.vec2(500, 500),
             .{
-                .color = zigui.Color.Slate,
-                .width = 5,
+                .color = zigui.Color.Red,
+                .width = 4,
+            },
+        );
+        try ui.popClip();
+
+        try draw_list.addLine(
+            zigui.vec2(100, 500),
+            zigui.vec2(500, 100),
+            .{
+                .color = zigui.Color.Red,
+                .width = 4,
             },
         );
 

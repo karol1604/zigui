@@ -30,6 +30,22 @@ pub const Rect = struct {
             point.x < self.pos.x + self.size.x and
             point.y < self.pos.y + self.size.y;
     }
+
+    pub fn intersect(self: Rect, other: Rect) ?Rect {
+        const x1 = @max(self.pos.x, other.pos.x);
+        const y1 = @max(self.pos.y, other.pos.y);
+        const x2 = @min(self.pos.x + self.size.x, other.pos.x + other.size.x);
+        const y2 = @min(self.pos.y + self.size.y, other.pos.y + other.size.y);
+
+        if (x2 <= x1 or y2 <= y1) {
+            return null;
+        }
+
+        return .{
+            .pos = .{ .x = x1, .y = y1 },
+            .size = .{ .x = x2 - x1, .y = y2 - y1 },
+        };
+    }
 };
 
 pub const Color = struct {
@@ -119,6 +135,40 @@ pub const Color = struct {
             .a = 1.0,
         };
     }
+
+    fn luminance(c: Color) f32 {
+        return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    }
+
+    fn mix(a: Color, b: Color, t: f32) Color {
+        return .{
+            .r = a.r + (b.r - a.r) * t,
+            .g = a.g + (b.g - a.g) * t,
+            .b = a.b + (b.b - a.b) * t,
+            .a = a.a + (b.a - a.a) * t,
+        };
+    }
+
+    pub fn lighten(self: Color, amount: f32) Color {
+        var result = Color.mix(self, Color.White, std.math.clamp(amount, 0, 1));
+        result.a = self.a;
+        return result;
+    }
+
+    pub fn darken(self: Color, amount: f32) Color {
+        var result = Color.mix(self, Color.Black, std.math.clamp(amount, 0, 1));
+        result.a = self.a;
+        return result;
+    }
+
+    pub fn getStrokeColor(self: Color) Color {
+        const lum = Color.luminance(self);
+        if (lum < 0.5) {
+            return self.lighten(0.5);
+        } else {
+            return self.darken(0.5);
+        }
+    }
 };
 
 pub const Stroke = struct {
@@ -153,6 +203,8 @@ pub const DrawCommand = union(enum) {
     ellipse: EllipseCommand,
     line: LineCommand,
     text: TextCommand,
+    push_clip: Rect,
+    pop_clip,
 };
 
 pub const TextCommand = struct {
@@ -214,5 +266,13 @@ pub const DrawList = struct {
             radius * 2,
         );
         try self.addEllipse(rect, paint);
+    }
+
+    pub fn pushClip(self: *DrawList, rect: Rect) !void {
+        try self.commands.append(self.alloc, .{ .push_clip = rect });
+    }
+
+    pub fn popClip(self: *DrawList) !void {
+        try self.commands.append(self.alloc, .{ .pop_clip = {} });
     }
 };
