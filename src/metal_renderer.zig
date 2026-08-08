@@ -11,7 +11,7 @@ const DrawList = draw.DrawList;
 
 pub const Vertex = extern struct {
     position: [2]f32,
-    _padding: [2]f32 = .{ 0, 0 }, //  we need to match metal's alignment
+    shape_position: [2]f32 = .{ 0, 0 }, // for ellipses
     color: [4]f32,
 };
 
@@ -24,6 +24,7 @@ pub const MetalRenderer = struct {
     batches: std.ArrayList(Batch),
     clip_stack: std.ArrayList(?Rect),
     alloc: std.mem.Allocator,
+    device: metal.Device,
 
     pub fn init(alloc: std.mem.Allocator, device: *const metal.Device) !MetalRenderer {
         var command_queue = try device.newCommandQueue();
@@ -64,12 +65,14 @@ pub const MetalRenderer = struct {
             .batches = .empty,
             .clip_stack = .empty,
             .alloc = alloc,
+            .device = device.clone(),
         };
     }
 
     pub fn deinit(self: *MetalRenderer) void {
         self.command_queue.deinit();
         self.pipeline.deinit();
+        self.device.deinit();
         self.vertices.deinit(self.alloc);
         self.batches.deinit(self.alloc);
         self.clip_stack.deinit(self.alloc);
@@ -82,46 +85,6 @@ pub const MetalRenderer = struct {
         logical_size: [2]f32,
         framebuffer_size: [2]u32,
     ) !void {
-        var drawable = layer.nextDrawable() catch |err| switch (err) {
-            error.NoDrawableAvailable => return,
-        };
-        defer drawable.deinit();
-
-        var texture = try drawable.texture();
-        defer texture.deinit();
-
-        const render_pass_desc = metal.RenderPassDescriptor{
-            .color_texture = &texture,
-            .load_action = .clear,
-            .store_action = .store,
-            .clear_color = metal.ClearColor{
-                .red = 0.1,
-                .green = 0.1,
-                .blue = 0.1,
-                .alpha = 1.0,
-            },
-        };
-
-        var command_buffer = try self.command_queue.newCommandBuffer();
-        defer command_buffer.deinit();
-
-        var render_encoder = try command_buffer.newRenderCommandEncoder(render_pass_desc);
-        defer render_encoder.deinit();
-
-        try render_encoder.setViewport(.{
-            .origin_x = 0,
-            .origin_y = 0,
-            .width = @floatFromInt(framebuffer_size[0]),
-            .height = @floatFromInt(framebuffer_size[1]),
-            .znear = 0,
-            .zfar = 1,
-        });
-
-        render_encoder.setRenderPipelineState(&self.pipeline);
-
-        const frame_uniforms = FrameUniforms{ .viewport_size = logical_size };
-        try render_encoder.setVertexBytes(std.mem.asBytes(&frame_uniforms), 1);
-
         self.vertices.clearRetainingCapacity();
         self.batches.clearRetainingCapacity();
         self.clip_stack.clearRetainingCapacity();
@@ -202,6 +165,24 @@ pub const MetalRenderer = struct {
                                 line.stroke.width,
                             );
                         },
+                        .ellipse => |ellipse| {
+                            if (ellipse.paint.fill) |fill| {
+                                // NOTE: for debug
+                                try appendRectStroke(
+                                    &self.vertices,
+                                    self.alloc,
+                                    ellipse.rect,
+                                    draw.Color.Gold,
+                                    1.0,
+                                );
+                                try appendEllipse(
+                                    &self.vertices,
+                                    self.alloc,
+                                    ellipse.rect,
+                                    fill,
+                                );
+                            }
+                        },
                         else => {
                             std.log.warn("Unsupported draw command: {s}", .{@tagName(command)});
                         },
@@ -214,15 +195,58 @@ pub const MetalRenderer = struct {
         }
 
         if (self.clip_stack.items.len != 1) {
-            try render_encoder.endEncoding();
             return error.UnbalancedClipStack;
         }
 
+        var drawable = layer.nextDrawable() catch |err| switch (err) {
+            error.NoDrawableAvailable => return,
+        };
+        defer drawable.deinit();
+
+        var texture = try drawable.texture();
+        defer texture.deinit();
+
+        const render_pass_desc = metal.RenderPassDescriptor{
+            .color_texture = &texture,
+            .load_action = .clear,
+            .store_action = .store,
+            .clear_color = metal.ClearColor{
+                .red = 0.1,
+                .green = 0.1,
+                .blue = 0.1,
+                .alpha = 1.0,
+            },
+        };
+
+        var command_buffer = try self.command_queue.newCommandBuffer();
+        defer command_buffer.deinit();
+
+        var render_encoder = try command_buffer.newRenderCommandEncoder(render_pass_desc);
+        defer render_encoder.deinit();
+
+        try render_encoder.setViewport(.{
+            .origin_x = 0,
+            .origin_y = 0,
+            .width = @floatFromInt(framebuffer_size[0]),
+            .height = @floatFromInt(framebuffer_size[1]),
+            .znear = 0,
+            .zfar = 1,
+        });
+
+        render_encoder.setRenderPipelineState(&self.pipeline);
+
+        const frame_uniforms = FrameUniforms{ .viewport_size = logical_size };
+        try render_encoder.setVertexBytes(std.mem.asBytes(&frame_uniforms), 1);
+
         if (self.batches.items.len > 0) {
-            try render_encoder.setVertexBytes(
-                std.mem.sliceAsBytes(self.vertices.items),
-                0,
-            );
+            const vertex_bytes = std.mem.sliceAsBytes(self.vertices.items);
+            var gpu_vertices = try self.device.newBufferWithBytes(vertex_bytes, .{
+                .storage_mode = .shared,
+                .cpu_cache_mode = .write_combined,
+            });
+            defer gpu_vertices.deinit();
+
+            try render_encoder.setVertexBuffer(&gpu_vertices, 0, 0);
 
             for (self.batches.items) |batch| {
                 try render_encoder.setScissorRect(
@@ -297,7 +321,7 @@ fn clipToScissorRect(
     };
 }
 
-fn appendRect(
+fn appendEllipse(
     vertices: *std.ArrayList(Vertex),
     allocator: std.mem.Allocator,
     rect: Rect,
@@ -312,6 +336,31 @@ fn appendRect(
 
     const c = [4]f32{ color.r, color.g, color.b, color.a };
 
+    try vertices.appendSlice(allocator, &.{
+        .{ .position = .{ left, top }, .shape_position = .{ -1, -1 }, .color = c },
+        .{ .position = .{ left, bottom }, .shape_position = .{ -1, 1 }, .color = c },
+        .{ .position = .{ right, top }, .shape_position = .{ 1, -1 }, .color = c },
+
+        .{ .position = .{ right, top }, .shape_position = .{ 1, -1 }, .color = c },
+        .{ .position = .{ left, bottom }, .shape_position = .{ -1, 1 }, .color = c },
+        .{ .position = .{ right, bottom }, .shape_position = .{ 1, 1 }, .color = c },
+    });
+}
+
+fn appendRect(
+    vertices: *std.ArrayList(Vertex),
+    allocator: std.mem.Allocator,
+    rect: Rect,
+    color: draw.Color,
+) !void {
+    if (rect.size.x <= 0 or rect.size.y <= 0) return;
+
+    const left: f32 = @floatCast(rect.pos.x);
+    const top: f32 = @floatCast(rect.pos.y);
+    const right: f32 = @floatCast(rect.pos.x + rect.size.x);
+    const bottom: f32 = @floatCast(rect.pos.y + rect.size.y);
+
+    const c = [4]f32{ color.r, color.g, color.b, color.a };
     try vertices.appendSlice(allocator, &.{
         .{ .position = .{ left, top }, .color = c },
         .{ .position = .{ left, bottom }, .color = c },

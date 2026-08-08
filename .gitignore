@@ -2,3 +2,5 @@
 zig-pkg/
 zig-out/
 flake.lock
+debug.entitlements
+profile.json.gz

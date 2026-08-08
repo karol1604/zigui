@@ -116,12 +116,24 @@ pub fn main(init: std.process.Init) !void {
         );
         try ui.popClip();
 
+        try ui.pushClip(zigui.Rect.init(400, 124000, 200, 200));
+
         try draw_list.addLine(
             zigui.vec2(100, 500),
             zigui.vec2(500, 100),
             .{
                 .color = zigui.Color.Red,
                 .width = 4,
+            },
+        );
+        try ui.popClip();
+
+        try draw_list.addEllipse(
+            zigui.Rect.init(400, 300, 200, 200),
+            .{
+                .fill = zigui.Color.rgb(0.2, 0.8, 0.4),
+                // .stroke = zigui.Color.fromHex(0x6642f5),
+                // .stroke_width = 20,
             },
         );
 

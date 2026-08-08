@@ -2,12 +2,14 @@
 using namespace metal;
 
 struct VertexOut {
-	float4 position [[position]];
-	float4 color;
+  float4 position [[position]];
+  float2 shape_pos;
+  float4 color;
 };
 
 struct Vertex {
   float2 position;
+  float2 shape_pos;
   float4 color;
 };
 
@@ -32,9 +34,14 @@ vertex VertexOut vertex_main(
 	  1.0
   );
   out.color = v.color;
+  out.shape_pos = v.shape_pos;
   return out;
 }
 
 fragment float4 fragment_main(VertexOut in [[stage_in]]) {
-	return in.color;
+  float dist_sq = dot(in.shape_pos, in.shape_pos);
+  if (dist_sq > 1.0) {
+    discard_fragment();
+  }
+    return in.color;
 }
