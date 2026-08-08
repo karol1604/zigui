@@ -54,10 +54,10 @@ pub const Ui = struct {
         else
             null;
 
-        try self.draw_list.pushClip(rect);
-
         try self.clip_stack.append(self.alloc, effective);
         errdefer _ = self.clip_stack.pop();
+
+        try self.draw_list.pushClip(rect);
     }
 
     pub fn popClip(self: *Ui) !void {

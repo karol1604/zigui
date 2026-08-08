@@ -128,10 +128,11 @@ pub fn main(init: std.process.Init) !void {
         );
         try ui.popClip();
 
-        try draw_list.addEllipse(
-            zigui.Rect.init(400, 300, 200, 200),
+        try draw_list.addCircle(
+            zigui.vec2(400, 300),
+            100,
             .{
-                .fill = zigui.Color.rgb(0.2, 0.8, 0.4),
+                .fill = zigui.Color.Crimson,
                 // .stroke = zigui.Color.fromHex(0x6642f5),
                 // .stroke_width = 20,
             },

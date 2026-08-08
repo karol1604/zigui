@@ -33,8 +33,8 @@ pub const MetalRenderer = struct {
         var shader_diagnostics = metal.ErrorInfo.init();
         defer shader_diagnostics.deinit();
 
-        var library = device.newLibraryWithSourceDetailed(
-            @embedFile("./shaders/test.metal"),
+        var library = device.newLibraryWithFileDetailed(
+            "./shaders/main.metal",
             &shader_diagnostics,
         ) catch |err| {
             std.debug.print("Metal shader error:\n{s}\n", .{shader_diagnostics.message()});
