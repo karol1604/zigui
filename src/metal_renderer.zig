@@ -13,6 +13,8 @@ pub const Vertex = extern struct {
     position: [2]f32,
     shape_position: [2]f32 = .{ 0, 0 }, // for ellipses
     color: [4]f32,
+    uv: [2]f32 = .{ 0, 0 }, // for textures
+    _padding: [2]f32 = .{ 0, 0 },
 };
 
 pub const FrameUniforms = extern struct { viewport_size: [2]f32 };
@@ -25,6 +27,8 @@ pub const MetalRenderer = struct {
     clip_stack: std.ArrayList(?Rect),
     alloc: std.mem.Allocator,
     device: metal.Device,
+    textures: std.ArrayList(metal.Texture),
+    white_texture: metal.Texture,
 
     pub fn init(alloc: std.mem.Allocator, device: *const metal.Device) !MetalRenderer {
         var command_queue = try device.newCommandQueue();
@@ -33,8 +37,8 @@ pub const MetalRenderer = struct {
         var shader_diagnostics = metal.ErrorInfo.init();
         defer shader_diagnostics.deinit();
 
-        var library = device.newLibraryWithFileDetailed(
-            "./shaders/main.metal",
+        var library = device.newLibraryWithSourceDetailed(
+            @embedFile("./shaders/main.metal"),
             &shader_diagnostics,
         ) catch |err| {
             std.debug.print("Metal shader error:\n{s}\n", .{shader_diagnostics.message()});
@@ -58,6 +62,27 @@ pub const MetalRenderer = struct {
         var pipeline = try device.newRenderPipelineState(pipeline_desc);
         errdefer pipeline.deinit();
 
+        const dev = device.clone();
+
+        const white_pixels = [_]u8{ 255, 255, 255, 255 };
+
+        const desc = metal.TextureDescriptor{
+            .pixel_format = .rgba8_unorm,
+            .width = 1,
+            .height = 1,
+            .storage_mode = .shared,
+        };
+
+        var white_tex = try dev.newTexture(desc);
+        errdefer white_tex.deinit();
+
+        try white_tex.replaceRegion(
+            metal.TextureRegion{ .x = 0, .y = 0, .width = 1, .height = 1 },
+            0,
+            &white_pixels,
+            4,
+        );
+
         return MetalRenderer{
             .command_queue = command_queue,
             .pipeline = pipeline,
@@ -65,7 +90,9 @@ pub const MetalRenderer = struct {
             .batches = .empty,
             .clip_stack = .empty,
             .alloc = alloc,
-            .device = device.clone(),
+            .device = dev,
+            .textures = .empty,
+            .white_texture = white_tex,
         };
     }
 
@@ -76,6 +103,66 @@ pub const MetalRenderer = struct {
         self.vertices.deinit(self.alloc);
         self.batches.deinit(self.alloc);
         self.clip_stack.deinit(self.alloc);
+
+        for (self.textures.items) |*texture| {
+            texture.deinit();
+        }
+        self.textures.deinit(self.alloc);
+        self.white_texture.deinit();
+    }
+
+    pub fn createTextureRgba8(
+        self: *MetalRenderer,
+        width: usize,
+        height: usize,
+        pixels: []const u8,
+        bytes_per_row: usize,
+    ) !draw.TextureHandle {
+        var texture = try self.device.newTexture(.{
+            .pixel_format = .rgba8_unorm,
+            .width = width,
+            .height = height,
+            .storage_mode = .shared,
+        });
+        errdefer texture.deinit();
+
+        try texture.replaceRegion(
+            .{
+                .x = 0,
+                .y = 0,
+                .width = width,
+                .height = height,
+            },
+            0,
+            pixels,
+            bytes_per_row,
+        );
+
+        const index = self.textures.items.len;
+        try self.textures.append(self.alloc, texture);
+
+        return @intCast(index);
+    }
+
+    fn setActiveTexture(
+        self: *MetalRenderer,
+        batch_start: *usize,
+        active_clip: ?Rect,
+        active_texture: *?draw.TextureHandle,
+        desired: ?draw.TextureHandle,
+    ) !void {
+        if (active_texture.* == desired)
+            return;
+
+        if (active_clip) |clip| {
+            batch_start.* = try self.finishBatch(
+                batch_start.*,
+                clip,
+                active_texture.*,
+            );
+        }
+
+        active_texture.* = desired;
     }
 
     pub fn render(
@@ -97,11 +184,13 @@ pub const MetalRenderer = struct {
 
         try self.clip_stack.append(self.alloc, active_clip);
 
+        var active_texture: ?draw.TextureHandle = null;
+
         command_loop: for (draw_list.commands.items) |command| {
             switch (command) {
                 .push_clip => |rect| {
                     if (active_clip) |clip| {
-                        batch_start = try self.finishBatch(batch_start, clip);
+                        batch_start = try self.finishBatch(batch_start, clip, active_texture);
                     }
 
                     active_clip = if (active_clip) |parent|
@@ -123,7 +212,7 @@ pub const MetalRenderer = struct {
                     }
 
                     if (active_clip) |clip| {
-                        batch_start = try self.finishBatch(batch_start, clip);
+                        batch_start = try self.finishBatch(batch_start, clip, active_texture);
                     }
 
                     if (self.clip_stack.items.len <= 1)
@@ -168,13 +257,13 @@ pub const MetalRenderer = struct {
                         .ellipse => |ellipse| {
                             if (ellipse.paint.fill) |fill| {
                                 // NOTE: for debug
-                                try appendRectStroke(
-                                    &self.vertices,
-                                    self.alloc,
-                                    ellipse.rect,
-                                    draw.Color.Gold,
-                                    1.0,
-                                );
+                                // try appendRectStroke(
+                                //     &self.vertices,
+                                //     self.alloc,
+                                //     ellipse.rect,
+                                //     draw.Color.Gold,
+                                //     1.0,
+                                // );
                                 try appendEllipse(
                                     &self.vertices,
                                     self.alloc,
@@ -182,6 +271,20 @@ pub const MetalRenderer = struct {
                                     fill,
                                 );
                             }
+                        },
+                        .image => |image| {
+                            try self.setActiveTexture(
+                                &batch_start,
+                                active_clip,
+                                &active_texture,
+                                image.texture,
+                            );
+
+                            try appendImage(
+                                &self.vertices,
+                                self.alloc,
+                                image,
+                            );
                         },
                         else => {
                             std.log.warn("Unsupported draw command: {s}", .{@tagName(command)});
@@ -191,7 +294,7 @@ pub const MetalRenderer = struct {
             }
         }
         if (active_clip) |clip| {
-            _ = try self.finishBatch(batch_start, clip);
+            _ = try self.finishBatch(batch_start, clip, active_texture);
         }
 
         if (self.clip_stack.items.len != 1) {
@@ -238,6 +341,28 @@ pub const MetalRenderer = struct {
         const frame_uniforms = FrameUniforms{ .viewport_size = logical_size };
         try render_encoder.setVertexBytes(std.mem.asBytes(&frame_uniforms), 1);
 
+        // const texture_pixels = [_]u8{
+        //     255, 0,   0,   255,
+        //     0,   255, 0,   255,
+        //     0,   0,   255, 255,
+        //     255, 255, 255, 255,
+        // };
+        //
+        // const desc = metal.TextureDescriptor{
+        //     .pixel_format = .rgba8_unorm,
+        //     .width = 2,
+        //     .height = 2,
+        //     .storage_mode = .shared,
+        // };
+        // const t = self.device.newTexture(desc) catch return error.TextureCreationFailed;
+        // try t.replaceRegion(
+        //     metal.TextureRegion{ .x = 0, .y = 0, .width = 2, .height = 2 },
+        //     0,
+        //     &texture_pixels,
+        //     4 * 2,
+        // );
+        // render_encoder.setFragmentTexture(&t, 0);
+
         if (self.batches.items.len > 0) {
             const vertex_bytes = std.mem.sliceAsBytes(self.vertices.items);
             var gpu_vertices = try self.device.newBufferWithBytes(vertex_bytes, .{
@@ -249,6 +374,9 @@ pub const MetalRenderer = struct {
             try render_encoder.setVertexBuffer(&gpu_vertices, 0, 0);
 
             for (self.batches.items) |batch| {
+                const tex = try self.resolveTexture(batch.texture);
+                render_encoder.setFragmentTexture(tex, 0);
+
                 try render_encoder.setScissorRect(
                     clipToScissorRect(batch.clip, logical_size, framebuffer_size),
                 );
@@ -273,6 +401,7 @@ pub const MetalRenderer = struct {
         self: *MetalRenderer,
         batch_start: usize,
         active_clip: Rect,
+        active_texture: ?draw.TextureHandle,
     ) !usize {
         const end = self.vertices.items.len;
 
@@ -283,9 +412,24 @@ pub const MetalRenderer = struct {
             .first_vertex = batch_start,
             .vertex_count = end - batch_start,
             .clip = active_clip,
+            .texture = active_texture,
         });
 
         return end;
+    }
+
+    fn resolveTexture(
+        self: *const MetalRenderer,
+        handle: ?draw.TextureHandle,
+    ) !*const metal.Texture {
+        if (handle) |id| {
+            if (id >= self.textures.items.len)
+                return error.InvalidTextureHandle;
+
+            return &self.textures.items[id];
+        }
+
+        return &self.white_texture;
     }
 };
 
@@ -293,6 +437,7 @@ const Batch = struct {
     first_vertex: usize,
     vertex_count: usize,
     clip: Rect,
+    texture: ?draw.TextureHandle,
 };
 
 fn clipToScissorRect(
@@ -319,6 +464,30 @@ fn clipToScissorRect(
         .width = right_fb - left_fb,
         .height = bottom_fb - top_fb,
     };
+}
+
+fn appendImage(
+    vertices: *std.ArrayList(Vertex),
+    allocator: std.mem.Allocator,
+    command: draw.ImageCommand,
+) !void {
+    const image = command;
+
+    const left: f32 = @floatCast(image.rect.pos.x);
+    const top: f32 = @floatCast(image.rect.pos.y);
+    const right: f32 = @floatCast(image.rect.pos.x + image.rect.size.x);
+    const bottom: f32 = @floatCast(image.rect.pos.y + image.rect.size.y);
+
+    const c = [4]f32{ image.tint.r, image.tint.g, image.tint.b, image.tint.a };
+    try vertices.appendSlice(allocator, &.{
+        .{ .position = .{ left, top }, .color = c, .uv = image.uv_min },
+        .{ .position = .{ left, bottom }, .color = c, .uv = .{ image.uv_min[0], image.uv_max[1] } },
+        .{ .position = .{ right, top }, .color = c, .uv = .{ image.uv_max[0], image.uv_min[1] } },
+
+        .{ .position = .{ right, top }, .color = c, .uv = .{ image.uv_max[0], image.uv_min[1] } },
+        .{ .position = .{ left, bottom }, .color = c, .uv = .{ image.uv_min[0], image.uv_max[1] } },
+        .{ .position = .{ right, bottom }, .color = c, .uv = image.uv_max },
+    });
 }
 
 fn appendEllipse(
@@ -362,13 +531,13 @@ fn appendRect(
 
     const c = [4]f32{ color.r, color.g, color.b, color.a };
     try vertices.appendSlice(allocator, &.{
-        .{ .position = .{ left, top }, .color = c },
-        .{ .position = .{ left, bottom }, .color = c },
-        .{ .position = .{ right, top }, .color = c },
+        .{ .position = .{ left, top }, .color = c, .uv = .{ 0, 0 } },
+        .{ .position = .{ left, bottom }, .color = c, .uv = .{ 0, 1 } },
+        .{ .position = .{ right, top }, .color = c, .uv = .{ 1, 0 } },
 
-        .{ .position = .{ right, top }, .color = c },
-        .{ .position = .{ left, bottom }, .color = c },
-        .{ .position = .{ right, bottom }, .color = c },
+        .{ .position = .{ right, top }, .color = c, .uv = .{ 1, 0 } },
+        .{ .position = .{ left, bottom }, .color = c, .uv = .{ 0, 1 } },
+        .{ .position = .{ right, bottom }, .color = c, .uv = .{ 1, 1 } },
     });
 }
 

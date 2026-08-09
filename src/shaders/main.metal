@@ -5,12 +5,14 @@ struct VertexOut {
   float4 position [[position]];
   float2 shape_pos;
   float4 color;
+  float2 uv;
 };
 
 struct Vertex {
   float2 position;
   float2 shape_pos;
   float4 color;
+  float2 uv;
 };
 
 struct FrameUniforms {
@@ -35,13 +37,44 @@ vertex VertexOut vertex_main(
   );
   out.color = v.color;
   out.shape_pos = v.shape_pos;
+  out.uv = v.uv;
   return out;
 }
 
-fragment float4 fragment_main(VertexOut in [[stage_in]]) {
-  float dist_sq = dot(in.shape_pos, in.shape_pos);
-  if (dist_sq > 1.0) {
-    discard_fragment();
+constexpr sampler tex_sampler(
+    min_filter::linear,
+    mag_filter::linear
+);
+
+fragment float4 fragment_main(
+  VertexOut in [[stage_in]],
+  texture2d<float> tex [[texture(0)]]
+) {
+  float distance = length(in.shape_pos);
+  float aa = max(fwidth(distance), 0.00001);
+
+  float coverage = 1.0 - smoothstep(
+      1.0 - aa,
+      1.0 + aa,
+      distance
+  );
+
+  if (coverage <= 0.0) {
+      discard_fragment();
   }
-    return in.color;
+
+  float4 sampled = tex.sample(tex_sampler, in.uv);
+
+
+    return float4(
+        sampled.rgb * in.color.rgb,
+        sampled.a * in.color.a * coverage
+    );
+
+  return float4(
+      in.color.rgb,
+      in.color.a * coverage
+  );
+
+
 }

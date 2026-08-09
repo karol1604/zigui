@@ -198,18 +198,31 @@ pub const LineCommand = struct {
     stroke: Stroke,
 };
 
+pub const TextCommand = struct {
+    text: []const u8,
+};
+
+pub const ImageCommand = struct {
+    texture: TextureHandle,
+    rect: Rect,
+
+    uv_min: [2]f32 = .{ 0, 0 },
+    uv_max: [2]f32 = .{ 1, 1 },
+
+    tint: Color = Color.White,
+};
+
 pub const DrawCommand = union(enum) {
     rect: RectCommand,
     ellipse: EllipseCommand,
     line: LineCommand,
     text: TextCommand,
+    image: ImageCommand,
     push_clip: Rect,
     pop_clip,
 };
 
-pub const TextCommand = struct {
-    text: []const u8,
-};
+pub const TextureHandle = u32;
 
 pub const DrawList = struct {
     commands: std.ArrayList(DrawCommand),
@@ -228,6 +241,27 @@ pub const DrawList = struct {
 
     pub fn reset(self: *DrawList) void {
         self.commands.clearRetainingCapacity();
+    }
+
+    pub fn addImage(
+        self: *DrawList,
+        texture: TextureHandle,
+        rect: Rect,
+        options: struct {
+            uv_min: [2]f32 = .{ 0, 0 },
+            uv_max: [2]f32 = .{ 1, 1 },
+            tint: Color = Color.White,
+        },
+    ) !void {
+        try self.commands.append(self.alloc, .{
+            .image = .{
+                .texture = texture,
+                .rect = rect,
+                .uv_min = options.uv_min,
+                .uv_max = options.uv_max,
+                .tint = options.tint,
+            },
+        });
     }
 
     pub fn addRect(self: *DrawList, rect: Rect, paint: Paint) !void {
