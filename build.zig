@@ -123,6 +123,13 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const zigimg_dependency = b.dependency("zigimg", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
+
     exe.root_module.addCSourceFile(.{
         .file = b.path(
             "src/platform/macos_shim.m",

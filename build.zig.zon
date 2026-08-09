@@ -36,6 +36,10 @@
             .url = "git+https://github.com/karol1604/metal-zig.git#cc82b15254fe7e93ddb6f7a7c01cc13161d5295c",
             .hash = "metal_zig-0.0.0-T8Qny1zUAQBD1AHcgHcQXHGedd8FvwexIZ0AlDsalOgA",
         },
+        .zigimg = .{
+            .url = "git+https://github.com/zigimg/zigimg.git#096115a3eeae1a4c477496d575f1f1f74865387c",
+            .hash = "zigimg-0.1.0-8_eo2mHBFwDLhWjXriR17_b7VF6qML1f98Xokp7ZZbop",
+        },
     },
     .paths = .{
         "build.zig",

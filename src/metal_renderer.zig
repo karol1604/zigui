@@ -202,6 +202,12 @@ pub const MetalRenderer = struct {
                 .pop_clip => {
                     // NOTE: for debug
                     if (active_clip) |cl| {
+                        try self.setActiveTexture(
+                            &batch_start,
+                            active_clip,
+                            &active_texture,
+                            null,
+                        );
                         try appendRectStroke(
                             &self.vertices,
                             self.alloc,
@@ -223,6 +229,23 @@ pub const MetalRenderer = struct {
                 },
                 else => {
                     if (active_clip == null) continue :command_loop;
+
+                    const desired_texture: ?draw.TextureHandle = switch (command) {
+                        .image => |image| image.texture,
+                        .rect, .line, .ellipse => null,
+                        .text => {
+                            std.log.warn("Text is not implemented", .{});
+                            continue :command_loop;
+                        },
+                        .push_clip, .pop_clip => unreachable,
+                    };
+
+                    try self.setActiveTexture(
+                        &batch_start,
+                        active_clip,
+                        &active_texture,
+                        desired_texture,
+                    );
 
                     switch (command) {
                         .rect => |rect| {
@@ -273,13 +296,6 @@ pub const MetalRenderer = struct {
                             }
                         },
                         .image => |image| {
-                            try self.setActiveTexture(
-                                &batch_start,
-                                active_clip,
-                                &active_texture,
-                                image.texture,
-                            );
-
                             try appendImage(
                                 &self.vertices,
                                 self.alloc,
