@@ -5,6 +5,7 @@ const metal = @import("metalzig");
 const macos = @import("platform/macos.zig");
 const zigui = @import("zigui");
 const zigimg = @import("zigimg");
+const cg = @import("coregraphics");
 
 fn cBool(val: c_int) bool {
     return val != 0;
@@ -74,16 +75,13 @@ pub fn main(init: std.process.Init) !void {
     defer alloc.free(texture_pixels);
 
     for (image.pixels.rgb24, 0..) |pixel, idx| {
-        const r = pixel.r;
-        const g = pixel.g;
-        const b = pixel.b;
-
-        texture_pixels[idx * 4 + 0] = r;
-        texture_pixels[idx * 4 + 1] = g;
-        texture_pixels[idx * 4 + 2] = b;
+        texture_pixels[idx * 4 + 0] = pixel.r;
+        texture_pixels[idx * 4 + 1] = pixel.g;
+        texture_pixels[idx * 4 + 2] = pixel.b;
         texture_pixels[idx * 4 + 3] = 255;
     }
     const tex = try renderer.createTextureRgba8(image.width, image.height, texture_pixels, 4 * image.width);
+    _ = tex;
 
     const checker_pixels = [_]u8{
         255, 0,   0,   255,
@@ -94,20 +92,7 @@ pub fn main(init: std.process.Init) !void {
     const checker = try renderer.createTextureRgba8(2, 2, &checker_pixels, 4 * 2);
     _ = checker;
 
-    // const desc = metal.TextureDescriptor{
-    //     .pixel_format = .rgba8_unorm,
-    //     .width = 2,
-    //     .height = 2,
-    //     .storage_mode = .shared,
-    // };
-    // const t = self.device.newTexture(desc) catch return error.TextureCreationFailed;
-    // try t.replaceRegion(
-    //     metal.TextureRegion{ .x = 0, .y = 0, .width = 2, .height = 2 },
-    //     0,
-    //     &texture_pixels,
-    //     4 * 2,
-    // );
-    // render_encoder.setFragmentTexture(&t, 0);
+    const font = try renderer.createFont(52);
 
     while (!cBool(glfw.glfwWindowShouldClose(window))) {
         input_state.beginFrame();
@@ -133,75 +118,82 @@ pub fn main(init: std.process.Init) !void {
         draw_list.reset();
         ui.beginFrame(&input_state, &draw_list);
 
-        try draw_list.addRect(
-            zigui.Rect.init(100, 100, 300, 200),
-            .{
-                .fill = zigui.Color.Lime,
-            },
+        try draw_list.addText(
+            font,
+            "hello from zigui!",
+            zigui.vec2(200, 200),
+            zigui.Color.Crimson,
         );
 
-        try draw_list.addImage(
-            tex,
-            zigui.Rect.init(400, 100, 300, 400),
-            .{
-                .uv_min = .{ 0, 0 },
-                .uv_max = .{ 1, 1 },
-                .tint = zigui.Color.Crimson,
-            },
-        );
-
-        try ui.pushClip(zigui.Rect.init(0, 0, 300, 300));
-
-        if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), zigui.Color.Coral)) {
-            std.log.info("Button 1 pressed!", .{});
-        }
-        try ui.pushClip(zigui.Rect.init(150, 0, 200, 50));
-
-        if (try ui.button(2, zigui.Rect.init(150, 25, 100, 50), zigui.Color.Teal)) {
-            std.log.info("Button 2 pressed!", .{});
-        }
-        try ui.popClip();
-
-        try draw_list.addRect(
-            zigui.Rect.init(100, 100, 400, 400),
-            .{
-                .fill = zigui.Color.rgb(1, 0.4, 0.6),
-                .stroke = zigui.Color.fromHex(0x6642f5),
-                .stroke_width = 20,
-            },
-        );
-        try draw_list.addLine(
-            zigui.vec2(100, 100),
-            zigui.vec2(500, 500),
-            .{
-                .color = zigui.Color.Red,
-                .width = 4,
-            },
-        );
-        try ui.popClip();
-
-        try ui.pushClip(zigui.Rect.init(400, 124000, 200, 200));
-
-        try draw_list.addLine(
-            zigui.vec2(100, 500),
-            zigui.vec2(500, 100),
-            .{
-                .color = zigui.Color.Red,
-                .width = 4,
-            },
-        );
-        try ui.popClip();
-
-        try draw_list.addCircle(
-            zigui.vec2(400, 400),
-            100,
-            .{
-                .fill = zigui.Color.Crimson,
-                // .stroke = zigui.Color.fromHex(0x6642f5),
-                // .stroke_width = 20,
-            },
-        );
-
+        // try draw_list.addRect(
+        //     zigui.Rect.init(100, 100, 300, 200),
+        //     .{
+        //         .fill = zigui.Color.Lime,
+        //     },
+        // );
+        //
+        // try draw_list.addImage(
+        //     tex,
+        //     zigui.Rect.init(400, 100, 300, 400),
+        //     .{
+        //         .uv_min = .{ 0.5, 0.5 },
+        //         .uv_max = .{ 1, 1 },
+        //         .tint = zigui.Color.Crimson,
+        //     },
+        // );
+        //
+        // try ui.pushClip(zigui.Rect.init(0, 0, 300, 300));
+        //
+        // if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), zigui.Color.Coral)) {
+        //     std.log.info("Button 1 pressed!", .{});
+        // }
+        // try ui.pushClip(zigui.Rect.init(150, 0, 200, 50));
+        //
+        // if (try ui.button(2, zigui.Rect.init(150, 25, 100, 50), zigui.Color.Teal)) {
+        //     std.log.info("Button 2 pressed!", .{});
+        // }
+        // try ui.popClip();
+        //
+        // try draw_list.addRect(
+        //     zigui.Rect.init(100, 100, 400, 400),
+        //     .{
+        //         .fill = zigui.Color.rgb(1, 0.4, 0.6),
+        //         .stroke = zigui.Color.fromHex(0x6642f5),
+        //         .stroke_width = 20,
+        //     },
+        // );
+        // try draw_list.addLine(
+        //     zigui.vec2(100, 100),
+        //     zigui.vec2(500, 500),
+        //     .{
+        //         .color = zigui.Color.Red,
+        //         .width = 4,
+        //     },
+        // );
+        // try ui.popClip();
+        //
+        // try ui.pushClip(zigui.Rect.init(400, 124000, 200, 200));
+        //
+        // try draw_list.addLine(
+        //     zigui.vec2(100, 500),
+        //     zigui.vec2(500, 100),
+        //     .{
+        //         .color = zigui.Color.Red,
+        //         .width = 4,
+        //     },
+        // );
+        // try ui.popClip();
+        //
+        // try draw_list.addCircle(
+        //     zigui.vec2(400, 400),
+        //     100,
+        //     .{
+        //         .fill = zigui.Color.Crimson,
+        //         // .stroke = zigui.Color.fromHex(0x6642f5),
+        //         // .stroke_width = 20,
+        //     },
+        // );
+        //
         ui.endFrame();
 
         try renderer.render(

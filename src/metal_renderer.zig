@@ -1,6 +1,7 @@
 const std = @import("std");
 const draw = @import("draw.zig");
 const metal = @import("metalzig");
+const cg = @import("coregraphics");
 
 const Rect = draw.Rect;
 const RectCommand = draw.RectCommand;
@@ -19,6 +20,25 @@ pub const Vertex = extern struct {
 
 pub const FrameUniforms = extern struct { viewport_size: [2]f32 };
 
+const Glyph = struct {
+    uv_min: [2]f32,
+    uv_max: [2]f32,
+    advance: f32,
+};
+
+const Font = struct {
+    ct_font: cg.CTFontRef,
+    atlas_texture: draw.TextureHandle,
+    glyphs: [128]?Glyph,
+    ascent: f32,
+    descent: f32,
+    leading: f32,
+    cell_width: f32,
+    cell_height: f32,
+    pen_x_in_cell: f32,
+    baseline_in_cell: f32,
+};
+
 pub const MetalRenderer = struct {
     command_queue: metal.CommandQueue,
     pipeline: metal.RenderPipelineState,
@@ -29,6 +49,7 @@ pub const MetalRenderer = struct {
     device: metal.Device,
     textures: std.ArrayList(metal.Texture),
     white_texture: metal.Texture,
+    fonts: std.ArrayList(Font),
 
     pub fn init(alloc: std.mem.Allocator, device: *const metal.Device) !MetalRenderer {
         var command_queue = try device.newCommandQueue();
@@ -57,12 +78,22 @@ pub const MetalRenderer = struct {
             .fragment_function = &fragment_fn,
             .color_attachment = metal.ColorAttachmentDescriptor{
                 .pixel_format = .bgra8_unorm,
+                .blending_enabled = true,
+
+                .source_rgb_blend_factor = .source_alpha,
+                .destination_rgb_blend_factor = .one_minus_source_alpha,
+                .rgb_blend_operation = .add,
+
+                .source_alpha_blend_factor = .one,
+                .destination_alpha_blend_factor = .one_minus_source_alpha,
+                .alpha_blend_operation = .add,
             },
         };
         var pipeline = try device.newRenderPipelineState(pipeline_desc);
         errdefer pipeline.deinit();
 
-        const dev = device.clone();
+        var dev = device.clone();
+        errdefer dev.deinit();
 
         const white_pixels = [_]u8{ 255, 255, 255, 255 };
 
@@ -92,6 +123,7 @@ pub const MetalRenderer = struct {
             .alloc = alloc,
             .device = dev,
             .textures = .empty,
+            .fonts = .empty,
             .white_texture = white_tex,
         };
     }
@@ -99,16 +131,172 @@ pub const MetalRenderer = struct {
     pub fn deinit(self: *MetalRenderer) void {
         self.command_queue.deinit();
         self.pipeline.deinit();
-        self.device.deinit();
-        self.vertices.deinit(self.alloc);
-        self.batches.deinit(self.alloc);
-        self.clip_stack.deinit(self.alloc);
 
         for (self.textures.items) |*texture| {
             texture.deinit();
         }
         self.textures.deinit(self.alloc);
         self.white_texture.deinit();
+
+        self.device.deinit();
+        self.vertices.deinit(self.alloc);
+        self.batches.deinit(self.alloc);
+        self.clip_stack.deinit(self.alloc);
+
+        for (self.fonts.items) |*font| {
+            cg.CFRelease(font.ct_font);
+        }
+        self.fonts.deinit(self.alloc);
+    }
+
+    pub fn createFont(self: *MetalRenderer, font_size: usize) !draw.FontHandle {
+        var font: Font = undefined;
+
+        const ct_font = cg.CTFontCreateWithName(
+            cg.CFSTR("Helvetica"),
+            @floatFromInt(font_size),
+            null,
+        );
+        font.ct_font = ct_font;
+
+        const ascent: f32 = @floatCast(cg.CTFontGetAscent(ct_font));
+        const descent: f32 = @floatCast(cg.CTFontGetDescent(ct_font));
+        const leading: f32 = @floatCast(cg.CTFontGetLeading(ct_font));
+        font.ascent = ascent;
+        font.descent = descent;
+        font.leading = leading;
+
+        const padding: f32 = 2;
+        font.pen_x_in_cell = padding;
+        font.baseline_in_cell = padding + font.descent;
+
+        const cell_width = 64;
+        const cell_height = 64;
+        const columns = 16;
+        const rows = 8;
+        font.cell_width = cell_width;
+        font.cell_height = cell_height;
+
+        const atlas_width = cell_width * columns;
+        const atlas_height = cell_height * rows;
+
+        const coverage = try self.alloc.alloc(u8, atlas_width * atlas_height);
+        defer self.alloc.free(coverage);
+        @memset(coverage, 0);
+
+        const color_space = cg.CGColorSpaceCreateDeviceGray() orelse
+            return error.CreateColorSpaceFailed;
+        defer cg.CGColorSpaceRelease(color_space);
+
+        const context = cg.CGBitmapContextCreate(
+            coverage.ptr,
+            atlas_width,
+            atlas_height,
+            8,
+            atlas_width,
+            color_space,
+            @bitCast(@as(c_int, cg.kCGImageAlphaNone)),
+        ) orelse return error.CreateBitmapContextFailed;
+        defer cg.CGContextRelease(context);
+
+        cg.CGContextSetGrayFillColor(context, 1, 1);
+
+        // printable ascii for now
+        var glyphs: [128]?Glyph = [_]?Glyph{null} ** 128;
+        for (32..127) |c| {
+            const char: cg.UniChar = @intCast(c);
+            var glyph: cg.CGGlyph = 0;
+            const found = cg.CTFontGetGlyphsForCharacters(
+                ct_font,
+                &char,
+                &glyph,
+                1,
+            );
+            if (!found) {
+                continue;
+            }
+
+            var advance: cg.CGSize = undefined;
+            _ = cg.CTFontGetAdvancesForGlyphs(
+                ct_font,
+                cg.kCTFontOrientationHorizontal,
+                &glyph,
+                &advance,
+                1,
+            );
+
+            const advance_x: f32 = @floatCast(advance.width);
+
+            const glyph_idx = c - 32;
+            const column = glyph_idx % columns;
+            const row = glyph_idx / columns;
+
+            const cell_x = column * cell_width;
+            const cell_y = row * cell_height;
+
+            // NOTE: flip the y-axis for atlas
+            const texture_row = rows - 1 - row;
+            const texture_cell_y = texture_row * cell_height;
+
+            const uv_min = [2]f32{
+                @as(f32, @floatFromInt(cell_x)) /
+                    @as(f32, @floatFromInt(atlas_width)),
+
+                @as(f32, @floatFromInt(texture_cell_y)) /
+                    @as(f32, @floatFromInt(atlas_height)),
+            };
+
+            const uv_max = [2]f32{
+                @as(f32, @floatFromInt(cell_x + cell_width)) /
+                    @as(f32, @floatFromInt(atlas_width)),
+
+                @as(f32, @floatFromInt(texture_cell_y + cell_height)) /
+                    @as(f32, @floatFromInt(atlas_height)),
+            };
+            glyphs[glyph_idx] = Glyph{
+                .uv_min = uv_min,
+                .uv_max = uv_max,
+                .advance = advance_x,
+            };
+
+            const glyph_position = cg.CGPoint{
+                .x = @floatFromInt(cell_x + 8),
+                .y = @as(f64, @floatFromInt(cell_y + 8)) + descent,
+            };
+
+            cg.CTFontDrawGlyphs(
+                ct_font,
+                &glyph,
+                &glyph_position,
+                1,
+                context,
+            );
+        }
+
+        font.glyphs = glyphs;
+
+        const rgba = try self.alloc.alloc(u8, atlas_width * atlas_height * 4);
+        defer self.alloc.free(rgba);
+
+        for (coverage, 0..) |alpha, i| {
+            rgba[i * 4 + 0] = 255;
+            rgba[i * 4 + 1] = 255;
+            rgba[i * 4 + 2] = 255;
+            rgba[i * 4 + 3] = alpha;
+        }
+
+        const atlas_texture = try self.createTextureRgba8(
+            atlas_width,
+            atlas_height,
+            rgba,
+            atlas_width * 4,
+        );
+        font.atlas_texture = atlas_texture;
+
+        const font_idx = self.fonts.items.len;
+        try self.fonts.append(self.alloc, font);
+
+        return @intCast(font_idx);
     }
 
     pub fn createTextureRgba8(
@@ -233,10 +421,7 @@ pub const MetalRenderer = struct {
                     const desired_texture: ?draw.TextureHandle = switch (command) {
                         .image => |image| image.texture,
                         .rect, .line, .ellipse => null,
-                        .text => {
-                            std.log.warn("Text is not implemented", .{});
-                            continue :command_loop;
-                        },
+                        .text => |text| self.fonts.items[text.font].atlas_texture,
                         .push_clip, .pop_clip => unreachable,
                     };
 
@@ -248,6 +433,15 @@ pub const MetalRenderer = struct {
                     );
 
                     switch (command) {
+                        .text => |text| {
+                            const font = &self.fonts.items[text.font];
+                            try appendText(
+                                &self.vertices,
+                                self.alloc,
+                                font,
+                                text,
+                            );
+                        },
                         .rect => |rect| {
                             if (rect.paint.fill) |fill| {
                                 try appendRect(
@@ -316,6 +510,8 @@ pub const MetalRenderer = struct {
         if (self.clip_stack.items.len != 1) {
             return error.UnbalancedClipStack;
         }
+
+        // *****
 
         var drawable = layer.nextDrawable() catch |err| switch (err) {
             error.NoDrawableAvailable => return,
@@ -482,12 +678,52 @@ fn clipToScissorRect(
     };
 }
 
+fn appendText(
+    vertices: *std.ArrayList(Vertex),
+    alloc: std.mem.Allocator,
+    font: *const Font,
+    text: TextCommand,
+) !void {
+    var pen = text.position;
+
+    for (text.text) |byte| {
+        if (byte == '\n') {
+            pen.x = text.position.x;
+            pen.y += font.ascent + font.descent + font.leading;
+            continue;
+        }
+
+        if (byte < 32 or byte > 126) continue;
+
+        const glyph = font.glyphs[byte - 32] orelse continue;
+        try appendImage(vertices, alloc, .{
+            .texture = font.atlas_texture,
+            .rect = .{
+                .pos = .{
+                    .x = pen.x - font.pen_x_in_cell,
+                    .y = pen.y,
+                },
+                .size = .{
+                    .x = font.cell_width,
+                    .y = font.cell_height,
+                },
+            },
+            .uv_min = glyph.uv_min,
+            .uv_max = glyph.uv_max,
+            .tint = text.color,
+        });
+
+        pen.x += glyph.advance;
+    }
+}
+
 fn appendImage(
     vertices: *std.ArrayList(Vertex),
     allocator: std.mem.Allocator,
     command: draw.ImageCommand,
 ) !void {
     const image = command;
+    if (image.rect.size.x <= 0 or image.rect.size.y <= 0) return;
 
     const left: f32 = @floatCast(image.rect.pos.x);
     const top: f32 = @floatCast(image.rect.pos.y);
