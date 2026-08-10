@@ -92,7 +92,10 @@ pub fn main(init: std.process.Init) !void {
     const checker = try renderer.createTextureRgba8(2, 2, &checker_pixels, 4 * 2);
     _ = checker;
 
-    const font = try renderer.createFont(52);
+    var fonts = zigui.font.FontManager.init(alloc);
+    defer fonts.deinit();
+
+    const font = try fonts.createFont("American Typewriter", 30);
 
     while (!cBool(glfw.glfwWindowShouldClose(window))) {
         input_state.beginFrame();
@@ -125,6 +128,10 @@ pub fn main(init: std.process.Init) !void {
             zigui.Color.Crimson,
         );
 
+        if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), "click me", zigui.Color.Coral)) {
+            std.log.info("Button 1 pressed!", .{});
+        }
+
         // try draw_list.addRect(
         //     zigui.Rect.init(100, 100, 300, 200),
         //     .{
@@ -141,7 +148,7 @@ pub fn main(init: std.process.Init) !void {
         //         .tint = zigui.Color.Crimson,
         //     },
         // );
-        //
+
         // try ui.pushClip(zigui.Rect.init(0, 0, 300, 300));
         //
         // if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), zigui.Color.Coral)) {
@@ -198,6 +205,7 @@ pub fn main(init: std.process.Init) !void {
 
         try renderer.render(
             &layer,
+            &fonts,
             &draw_list,
             .{ @floatFromInt(logical_width), @floatFromInt(logical_height) },
             .{ @intCast(fb_width), @intCast(fb_height) },

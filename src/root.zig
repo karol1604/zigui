@@ -2,6 +2,7 @@ const draw = @import("draw.zig");
 const ui = @import("ui.zig");
 const coregraphics_renderer = @import("coregraphics_renderer.zig");
 pub const metal_renderer = @import("metal_renderer.zig");
+pub const font = @import("font.zig");
 
 pub const cg = coregraphics_renderer.cg;
 

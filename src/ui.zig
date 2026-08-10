@@ -93,7 +93,7 @@ pub const Ui = struct {
         return clip.contains(pos);
     }
 
-    pub fn button(self: *Ui, id: u64, rect: Rect, color: Color) !bool {
+    pub fn button(self: *Ui, id: u64, rect: Rect, label: []const u8, color: Color) !bool {
         const hovered = rect.contains(self.input.mouse_pos) and
             self.isInsideCurrentClip(self.input.mouse_pos);
 
@@ -124,6 +124,13 @@ pub const Ui = struct {
             .stroke = color.getStrokeColor(),
             .stroke_width = 1,
         });
+
+        try self.draw_list.addText(
+            0,
+            label,
+            rect.pos,
+            Color.White,
+        );
 
         return clicked;
     }
