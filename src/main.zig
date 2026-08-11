@@ -52,9 +52,14 @@ pub fn main(init: std.process.Init) !void {
     const view = try macos.attach(window, layer.nativeHandle());
     defer macos.detach(view);
 
+    var fonts = zigui.font.FontManager.init(alloc);
+    defer fonts.deinit();
+
+    const font = try fonts.createFont("Helvetica", 15);
+
     var draw_list = try zigui.DrawList.init(alloc);
     defer draw_list.deinit();
-    var ui: zigui.Ui = .{ .alloc = alloc };
+    var ui: zigui.Ui = .{ .alloc = alloc, .fonts = &fonts, .default_font = font };
     defer ui.deinit();
     var input_state: zigui.InputState = .{};
 
@@ -92,10 +97,7 @@ pub fn main(init: std.process.Init) !void {
     const checker = try renderer.createTextureRgba8(2, 2, &checker_pixels, 4 * 2);
     _ = checker;
 
-    var fonts = zigui.font.FontManager.init(alloc);
-    defer fonts.deinit();
-
-    const font = try fonts.createFont("American Typewriter", 30);
+    var slider_radius: f64 = 50;
 
     while (!cBool(glfw.glfwWindowShouldClose(window))) {
         input_state.beginFrame();
@@ -121,16 +123,26 @@ pub fn main(init: std.process.Init) !void {
         draw_list.reset();
         ui.beginFrame(&input_state, &draw_list);
 
-        try draw_list.addText(
-            font,
-            "hello from zigui!",
-            zigui.vec2(200, 200),
-            zigui.Color.Crimson,
+        try draw_list.addCircle(
+            zigui.vec2(400, 300),
+            slider_radius * 2,
+            .{ .fill = zigui.Color.Crimson },
         );
 
-        if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), "click me", zigui.Color.Coral)) {
-            std.log.info("Button 1 pressed!", .{});
+        const col_rect = zigui.Rect.init(20, 20, 200, 200);
+        try ui.beginColumn(col_rect, 8);
+
+        try ui.label("Circle radius", .{});
+        _ = try ui.slider(1, &slider_radius, 10, 100, .{});
+
+        if (try ui.button(3, "Reset", .{ .color = zigui.Color.Crimson })) {
+            slider_radius = 50;
         }
+
+        // try ui.spacer(10);
+        //
+        // _ = try ui.button(3, "Delete", .{ .color = zigui.Color.Crimson });
+        try ui.endColumn();
 
         // try draw_list.addRect(
         //     zigui.Rect.init(100, 100, 300, 200),
@@ -148,15 +160,15 @@ pub fn main(init: std.process.Init) !void {
         //         .tint = zigui.Color.Crimson,
         //     },
         // );
-
+        //
         // try ui.pushClip(zigui.Rect.init(0, 0, 300, 300));
         //
-        // if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), zigui.Color.Coral)) {
+        // if (try ui.button(1, zigui.Rect.init(25, 25, 100, 50), "click me", zigui.Color.Coral)) {
         //     std.log.info("Button 1 pressed!", .{});
         // }
         // try ui.pushClip(zigui.Rect.init(150, 0, 200, 50));
         //
-        // if (try ui.button(2, zigui.Rect.init(150, 25, 100, 50), zigui.Color.Teal)) {
+        // if (try ui.button(2, zigui.Rect.init(150, 25, 100, 50), "click", zigui.Color.Teal)) {
         //     std.log.info("Button 2 pressed!", .{});
         // }
         // try ui.popClip();

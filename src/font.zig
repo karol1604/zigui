@@ -57,6 +57,19 @@ pub const FontManager = struct {
         ) orelse error.CreateCFStringFailed;
     }
 
+    pub fn measureText(self: *const FontManager, handle: draw.FontHandle, text: []const u8) !draw.Vec2 {
+        const font = try self.getFont(handle);
+
+        var width: f64 = 0;
+        for (text) |byte| {
+            if (byte < 32 or byte > 126) continue;
+            const glyph = font.glyphs[byte - 32] orelse continue;
+            width += glyph.advance;
+        }
+
+        return draw.vec2(width, font.ascent + font.descent);
+    }
+
     pub fn createFont(self: *FontManager, font_name: []const u8, font_size: usize) !draw.FontHandle {
         var font: Font = undefined;
         const cf_font_name = try cfString(font_name);
