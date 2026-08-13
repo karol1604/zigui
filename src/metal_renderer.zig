@@ -250,10 +250,10 @@ pub const MetalRenderer = struct {
                 },
                 .pop_clip => {
                     // NOTE: for debug
-                    if (active_clip) |cl| {
-                        try self.setActiveTexture(&batch_start, active_clip, &active_texture, null);
-                        try appendRectStroke(&self.vertices, self.alloc, cl, draw.Color.Lime, 1);
-                    }
+                    // if (active_clip) |cl| {
+                    //     try self.setActiveTexture(&batch_start, active_clip, &active_texture, null);
+                    //     try appendRectStroke(&self.vertices, self.alloc, cl, draw.Color.Lime, 1);
+                    // }
 
                     if (active_clip) |clip| {
                         batch_start = try self.finishBatch(batch_start, clip, active_texture);

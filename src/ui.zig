@@ -16,10 +16,12 @@ pub const ButtonState = struct {
 pub const InputState = struct {
     mouse_pos: Vec2 = .{ .x = 0, .y = 0 },
     mouse_button_left: ButtonState = .{},
+    scroll_offset: Vec2 = .{ .x = 0, .y = 0 },
 
     pub fn beginFrame(self: *InputState) void {
         self.mouse_button_left.pressed = false;
         self.mouse_button_left.released = false;
+        self.scroll_offset = .{ .x = 0, .y = 0 };
     }
 
     pub fn setMouseButton(self: *InputState, is_down: bool) void {
@@ -39,6 +41,16 @@ const Layout = struct {
     cursor_y: f64,
 };
 
+const ScrollState = struct {
+    offset_y: f64 = 0,
+    content_height: f64 = 0,
+};
+const ScrollContext = struct {
+    id: u64,
+    viewport: Rect,
+    options: Ui.ScrollOptions,
+};
+
 pub const Ui = struct {
     /// ID of the currently hovered element.
     hot_id: ?u64 = null,
@@ -51,10 +63,22 @@ pub const Ui = struct {
     fonts: *const font.FontManager,
     default_font: draw.FontHandle,
     layout_stack: std.ArrayList(Layout) = .empty,
+    scroll_states: std.AutoHashMap(u64, ScrollState),
+    scroll_stack: std.ArrayList(ScrollContext) = .empty,
 
+    pub fn init(alloc: std.mem.Allocator, fonts: *const font.FontManager, default_font: draw.FontHandle) Ui {
+        return Ui{
+            .alloc = alloc,
+            .fonts = fonts,
+            .default_font = default_font,
+            .scroll_states = std.AutoHashMap(u64, ScrollState).init(alloc),
+        };
+    }
     pub fn deinit(self: *Ui) void {
         self.clip_stack.deinit(self.alloc);
         self.layout_stack.deinit(self.alloc);
+        self.scroll_states.deinit();
+        self.scroll_stack.deinit(self.alloc);
     }
 
     pub fn pushClip(self: *Ui, rect: Rect) !void {
@@ -88,6 +112,7 @@ pub const Ui = struct {
     pub fn endFrame(self: *Ui) void {
         std.debug.assert(self.clip_stack.items.len == 0);
         std.debug.assert(self.layout_stack.items.len == 0);
+        std.debug.assert(self.scroll_stack.items.len == 0);
 
         if (self.input.mouse_button_left.released) {
             self.active_id = null;
@@ -103,6 +128,111 @@ pub const Ui = struct {
             return false;
 
         return clip.contains(pos);
+    }
+
+    pub const ScrollOptions = struct {
+        gap: f64 = 8,
+        scroll_speed: f64 = 15,
+        scrollbar_width: f64 = 6,
+        scrollbar_gap: f64 = 4,
+        scrollbar_margin: f64 = 2,
+        min_thumb_height: f64 = 20,
+        track_color: Color = Color.DarkGray,
+        thumb_color: Color = Color.Gray,
+    };
+    pub fn beginScroll(self: *Ui, id: u64, viewport: Rect, options: ScrollOptions) !void {
+        const entry = try self.scroll_states.getOrPut(id);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .{};
+        }
+
+        const state = entry.value_ptr;
+
+        const hovered = viewport.contains(self.input.mouse_pos) and
+            self.isInsideCurrentClip(self.input.mouse_pos);
+        if (hovered) {
+            state.offset_y -= self.input.scroll_offset.y * options.scroll_speed;
+        }
+
+        const max_offset = @max(0, state.content_height - viewport.size.y);
+        state.offset_y = std.math.clamp(state.offset_y, 0, max_offset);
+
+        try self.pushClip(viewport);
+
+        const gutter = options.scrollbar_width + options.scrollbar_gap + options.scrollbar_margin * 2;
+        const content_width = @max(0, viewport.size.x - gutter);
+
+        try self.beginColumn(
+            Rect.init(
+                viewport.pos.x,
+                viewport.pos.y - state.offset_y,
+                content_width,
+                viewport.size.y,
+            ),
+            options.gap,
+        );
+
+        try self.scroll_stack.append(self.alloc, .{
+            .id = id,
+            .viewport = viewport,
+            .options = options,
+        });
+    }
+
+    pub fn endScroll(self: *Ui) !void {
+        if (self.scroll_stack.items.len == 0) return error.ScrollStackUnderflow;
+
+        const content_height = try self.endColumn();
+        const context = self.scroll_stack.pop().?;
+
+        const state = self.scroll_states.getPtr(context.id) orelse return error.MissingScrollState;
+
+        state.content_height = content_height;
+
+        const max_offset = @max(0, content_height - context.viewport.size.y);
+
+        state.offset_y = std.math.clamp(state.offset_y, 0, max_offset);
+
+        if (max_offset > 0) {
+            try self.drawScrollbar(context.viewport, content_height, state.offset_y, context.options);
+        }
+
+        try self.popClip();
+    }
+
+    fn drawScrollbar(
+        self: *Ui,
+        viewport: Rect,
+        content_height: f64,
+        offset_y: f64,
+        options: ScrollOptions,
+    ) !void {
+        const track = Rect.init(
+            viewport.pos.x + viewport.size.x - options.scrollbar_margin - options.scrollbar_width,
+            viewport.pos.y + options.scrollbar_margin,
+            options.scrollbar_width,
+            viewport.size.y - options.scrollbar_margin * 2,
+        );
+
+        const visible_fraction = std.math.clamp(viewport.size.y / content_height, 0, 1);
+        const thumb_height = @min(
+            track.size.y,
+            @max(options.min_thumb_height, track.size.y * visible_fraction),
+        );
+
+        const max_offset = content_height - viewport.size.y;
+        const scroll_fraction = std.math.clamp(offset_y / max_offset, 0, 1);
+        const thumb_travel = track.size.y - thumb_height;
+
+        const thumb = Rect.init(
+            track.pos.x,
+            track.pos.y + thumb_travel * scroll_fraction,
+            track.size.x,
+            thumb_height,
+        );
+
+        try self.draw_list.addRect(track, .{ .fill = options.track_color });
+        try self.draw_list.addRect(thumb, .{ .fill = options.thumb_color });
     }
 
     pub const ButtonOptions = struct {
@@ -149,19 +279,11 @@ pub const Ui = struct {
         });
 
         const label_position = draw.vec2(
-            rect.pos.x +
-                (rect.size.x - label_size.x) / 2,
-
-            rect.pos.y +
-                (rect.size.y - label_size.y) / 2,
+            rect.pos.x + (rect.size.x - label_size.x) / 2,
+            rect.pos.y + (rect.size.y - label_size.y) / 2,
         );
 
-        try self.draw_list.addText(
-            self.default_font,
-            label_text,
-            label_position,
-            options.text_color,
-        );
+        try self.draw_list.addText(self.default_font, label_text, label_position, options.text_color);
 
         return clicked;
     }
@@ -279,9 +401,12 @@ pub const Ui = struct {
         try self.layout_stack.append(self.alloc, layout);
     }
 
-    pub fn endColumn(self: *Ui) !void {
+    /// Returns the total height of the column content, including the last gap.
+    pub fn endColumn(self: *Ui) !f64 {
         if (self.layout_stack.items.len == 0) return error.LayoutStackUnderflow;
-        _ = self.layout_stack.pop();
+        const layout = self.layout_stack.pop().?;
+
+        return @max(0, layout.cursor_y - layout.bounds.pos.y - layout.gap);
     }
 
     fn nextRect(self: *Ui, height: f64) !Rect {

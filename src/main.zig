@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init) !void {
 
     var draw_list = try zigui.DrawList.init(alloc);
     defer draw_list.deinit();
-    var ui: zigui.Ui = .{ .alloc = alloc, .fonts = &fonts, .default_font = font };
+    var ui = zigui.Ui.init(alloc, &fonts, font);
     defer ui.deinit();
     var input_state: zigui.InputState = .{};
 
@@ -68,6 +68,7 @@ pub fn main(init: std.process.Init) !void {
     _ = glfw.glfwSetCursorPosCallback(window, cursorPosCallback);
     _ = glfw.glfwSetMouseButtonCallback(window, mouseButtonCallback);
     _ = glfw.glfwSetWindowFocusCallback(window, windowFocusCallback);
+    _ = glfw.glfwSetScrollCallback(window, scrollCallback);
 
     var read_buffer: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
     var image = try zigimg.Image.fromFilePath(alloc, init.io, "paper.jpg", read_buffer[0..]);
@@ -98,6 +99,9 @@ pub fn main(init: std.process.Init) !void {
     _ = checker;
 
     var slider_radius: f64 = 50;
+    var slider_r: f64 = 0.5;
+    var slider_g: f64 = 0.1;
+    var slider_b: f64 = 0.1;
 
     while (!cBool(glfw.glfwWindowShouldClose(window))) {
         input_state.beginFrame();
@@ -126,23 +130,36 @@ pub fn main(init: std.process.Init) !void {
         try draw_list.addCircle(
             zigui.vec2(400, 300),
             slider_radius * 2,
-            .{ .fill = zigui.Color.Crimson },
+            .{ .fill = zigui.Color.rgb(
+                @floatCast(slider_r),
+                @floatCast(slider_g),
+                @floatCast(slider_b),
+            ) },
         );
 
-        const col_rect = zigui.Rect.init(20, 20, 200, 200);
-        try ui.beginColumn(col_rect, 8);
+        const col_rect = zigui.Rect.init(20, 20, 200, 100);
+        try ui.beginScroll(0, col_rect, .{ .gap = 8, .scroll_speed = 10 });
 
         try ui.label("Circle radius", .{});
         _ = try ui.slider(1, &slider_radius, 10, 100, .{});
 
-        if (try ui.button(3, "Reset", .{ .color = zigui.Color.Crimson })) {
+        try ui.label("Red", .{});
+        _ = try ui.slider(2, &slider_r, 0, 1, .{});
+
+        try ui.label("Green", .{});
+        _ = try ui.slider(3, &slider_g, 0, 1, .{});
+
+        try ui.label("Blue", .{});
+        _ = try ui.slider(4, &slider_b, 0, 1, .{});
+
+        if (try ui.button(5, "Reset", .{ .color = zigui.Color.Crimson })) {
             slider_radius = 50;
         }
 
         // try ui.spacer(10);
         //
         // _ = try ui.button(3, "Delete", .{ .color = zigui.Color.Crimson });
-        try ui.endColumn();
+        try ui.endScroll();
 
         // try draw_list.addRect(
         //     zigui.Rect.init(100, 100, 300, 200),
@@ -240,6 +257,12 @@ fn getInputState(
 fn cursorPosCallback(window: ?*glfw.GLFWwindow, x: f64, y: f64) callconv(.c) void {
     const input_state = getInputState(window) orelse return;
     input_state.mouse_pos = zigui.vec2(x, y);
+}
+
+fn scrollCallback(window: ?*glfw.GLFWwindow, x_offset: f64, y_offset: f64) callconv(.c) void {
+    const input_state = getInputState(window) orelse return;
+    input_state.scroll_offset.x += x_offset;
+    input_state.scroll_offset.y += y_offset;
 }
 
 fn mouseButtonCallback(
